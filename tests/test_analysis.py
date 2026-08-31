@@ -67,3 +67,40 @@ def test_every_recommendation_explains_itself(photo, flat_graphic, text_screensh
 def test_stats_serialise_for_the_json_report(photo):
     data = analyze(photo).to_dict()
     assert data['kind_label'] and data['width'] == photo.size[0]
+
+
+def test_a_large_screenshot_is_not_mistaken_for_a_logo():
+    """A 1600px UI capture shrinks to a 256px thumbnail whose text has blurred
+    into flat colour - it used to be classified as a flat graphic. Measuring
+    edges at a larger working size is what keeps it a screenshot."""
+    from tests.conftest import make_text_screenshot
+    for size in ((1600, 1000), (1200, 800), (600, 400)):
+        stats = analyze(make_text_screenshot(*size))
+        assert stats.kind == TEXT_SCREENSHOT, size
+        assert stats.edge_density > 0.02, size
+
+
+def test_edge_density_does_not_depend_on_where_content_sits():
+    """Measuring the whole frame, not a sampled crop, is what makes this hold -
+    a left-aligned table must score the same as a centred one."""
+    from PIL import ImageDraw
+
+    def canvas_with_text_at(x):
+        canvas = Image.new('RGB', (1400, 900), 'white')
+        draw = ImageDraw.Draw(canvas)
+        for y in range(60, 840, 14):
+            draw.text((x, y), 'tiny dense label text 12345 OK', fill=(10, 10, 10))
+        return analyze(canvas).edge_density
+
+    corner, centre = canvas_with_text_at(10), canvas_with_text_at(560)
+    assert corner > 0.01 and centre > 0.01
+    assert abs(corner - centre) < 0.01
+
+
+def test_a_photograph_has_almost_no_hard_edges(photo):
+    assert analyze(photo).edge_density < 0.01
+
+
+def test_flat_artwork_stays_below_the_text_threshold(flat_graphic):
+    from image_optimizer.analysis import TEXT_EDGE_THRESHOLD
+    assert analyze(flat_graphic).edge_density < TEXT_EDGE_THRESHOLD

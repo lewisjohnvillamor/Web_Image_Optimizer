@@ -2,165 +2,350 @@
 
 **Author:** Lewis John Villamor
 
-A desktop app and CLI that makes images actually ready for the web: it picks
-the right format and quality **per image** by measuring the result, generates
-the responsive variants and the `<picture>` markup to serve them, and can write
-the alt text most sites are missing.
+A desktop app and command-line tool that makes a folder of images ready for the
+web. It works out what each image *is*, encodes it several ways, measures the
+results, and keeps the smallest file that still looks right — then writes the
+responsive sizes and the HTML to serve them.
 
-![Screenshot Placeholder](screenshot.png)
-*(Add a screenshot of your application here named `screenshot.png`)*
+![The app after a run](docs/images/light-06-results.png)
 
----
-
-## Why this is different from "convert everything to WebP at quality 80"
-
-A single quality slider is a guess applied to every image, and it is wrong in
-both directions at once — wasteful on soft photos, visibly damaged on
-screenshots and logos. This version measures instead of guessing:
-
-1. **Analyse** the pixels to work out what the image *is* — photo,
-   illustration, flat graphic, or a screenshot full of small text.
-2. **Encode it several ways**, and score each result against the original
-   using SSIM (structural similarity) on the luma channel.
-3. **Keep the smallest file** that still clears the visual target you chose.
-
-Run on this repository's own test fixtures, against what the previous version
-of this tool produced:
-
-| File | Source | Old: WebP q80 | New: smart | Chosen automatically | Smaller by |
-|---|---|---|---|---|---|
-| `logo.png` | 3.8 KiB | 3.2 KiB | **500 B** | WebP lossless | 85% |
-| `photo.jpg` | 418.4 KiB | 179.1 KiB | **55.3 KiB** | AVIF q48 | 69% |
-| `screenshot.png` | 113.9 KiB | 44.0 KiB | **1.6 KiB** | WebP lossless | 96% |
-| **Total** | **536.1 KiB** | **226.2 KiB** | **57.4 KiB** | | **75%** |
-
-58% total reduction before, 89% now — and the screenshot and logo are now
-**pixel-identical** to the source rather than smeared by lossy compression.
-
-The honest trade-off: measuring costs time. That run took 0.2s the old way and
-3.7s the new way (the quality search runs at a cheap encoder setting and only
-re-encodes the winner at full effort, which keeps it to roughly 3x). Use `--skip-existing` for incremental builds (a second run
-over unchanged files takes milliseconds), turn the effort slider down, or pick
-`Fixed quality` mode if you want the old speed back.
-
-> These are synthetic fixtures, chosen to cover the three content types. Your
-> own images will land on different numbers — the app tells you exactly what it
-> did for every file.
+On the five images in that run: **2.0 MiB → 160.8 KiB, 92% smaller**, in 14
+seconds, with the logo and the dashboard screenshot coming out *pixel-identical*
+to the originals.
 
 ---
 
-## What it does
+## Table of contents
 
-**Compression**
-* **Per-image quality search** — binary-searches the quality scale for the
-  cheapest setting that still meets your visual target (Maximum / High /
-  Balanced / Smallest), measured with SSIM.
-* **Content-aware settings** — flat graphics go lossless (usually smaller *and*
-  perfect), screenshots get quality headroom so text doesn't ring, busy photos
-  get compressed harder because the detail hides the artefacts.
-* **AVIF, WebP, JPEG and PNG** output. `auto` encodes both AVIF and WebP and
-  keeps whichever came out smaller.
-* **Never larger than the original** — if nothing we encode beats the source
-  file, the original is copied through untouched.
-
-**Correctness fixes over the previous version**
-* **EXIF orientation is applied**, so portrait phone photos stop coming out
-  sideways.
-* **Colour profiles are converted to sRGB** before being stripped, instead of
-  being discarded and shifting every colour.
-* **Alpha is composited onto a background** for formats that can't carry it,
-  instead of failing with `cannot write mode RGBA as JPEG`.
-
-**Delivery**
-* **Responsive variants** — give it a list of widths and it writes
-  `hero-1600w.avif`, `hero-800w.avif`, and so on.
-* **`<picture>` markup generated for you**, with `srcset`, `sizes`, `width`,
-  `height` (no layout shift), `loading="lazy"` and the alt text filled in.
-* **Reports** — an HTML summary, plus JSON and CSV for pipelines.
-
-**AI alt text (optional)**
-* Generates WCAG-conscious alt text, a caption and an SEO filename suggestion
-  for every image, using Claude. Decorative images correctly get *empty* alt
-  text rather than noise for screen readers.
-* Off by default. See [Privacy](#privacy) below.
-
-**Workflow**
-* **Batch, recursive, parallel** — folder structure preserved, all cores used.
-* **Cancel button** that actually stops the run.
-* **Incremental** — `--skip-existing` leaves up-to-date outputs alone.
-* **Presets** for common jobs, plus your own saved ones.
-* **CLI** for build pipelines and CI.
-* Settings persist between launches.
+- [Why not just "convert everything to WebP at quality 80"](#why-not-just-convert-everything-to-webp-at-quality-80)
+- [Install](#install)
+- [Using the desktop app](#using-the-desktop-app-step-by-step)
+- [What the settings actually do](#what-the-settings-actually-do)
+- [Using the output on your site](#using-the-output-on-your-site)
+- [The reports](#the-reports)
+- [AI alt text](#ai-alt-text-optional)
+- [Using the command line](#using-the-command-line)
+- [Using it from Python](#using-it-from-python)
+- [Recipes](#recipes)
+- [Troubleshooting](#troubleshooting)
+- [Limitations](#limitations)
 
 ---
 
-## Installation
+## Why not just "convert everything to WebP at quality 80"
+
+Because one quality number is a guess applied to every image, and it is wrong in
+two directions at once — wasteful on soft photos, and visibly destructive on
+screenshots, logos and anything containing text.
+
+Here is the same region of a dashboard screenshot, encoded both ways. The bottom
+row subtracts each result from the original and amplifies the difference so you
+can see it at all; black means the pixel is untouched.
+
+![Quality 80 versus content-aware encoding](docs/images/quality-comparison.png)
+
+Quality 80 shreds every glyph edge to produce a **66 KiB** file. This tool
+recognised a screenshot, chose lossless WebP, and produced a **20 KiB** file that
+is bit-for-bit identical to the source. Smaller *and* perfect — the fixed-quality
+setting was simply the wrong tool for that image.
+
+**How it decides.** For each image:
+
+1. **Analyse the pixels** — photo, illustration, flat graphic, or screenshot with
+   text? Measured from edge density, colour spread and how much of the frame is
+   flat.
+2. **Encode it several ways** — AVIF and WebP, lossy and (for flat art) lossless.
+3. **Score each result** against the original with SSIM, and **binary-search the
+   quality scale** for the cheapest setting that still clears your visual target.
+4. **Keep the smallest file** that passed. If nothing beat the original, the
+   original is copied through untouched.
+
+The cost is time: measuring is several times slower than blind conversion. The
+search runs at a cheap encoder setting and only re-encodes the winner at full
+effort, which keeps it to roughly 3× a fixed-quality run.
+
+---
+
+## Install
 
 Python 3.9 or newer.
 
 ```bash
-git clone <your-repository-url>
+git clone https://github.com/lewisjohnvillamor/Web_Image_Optimizer.git
 cd Web_Image_Optimizer
 
 python -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
+source venv/bin/activate          # Windows: venv\Scripts\activate
 
 pip install -r requirements.txt
 ```
 
-Or as a package, which also puts `image-optimizer` on your PATH:
-
-```bash
-pip install -e ".[all]"
-```
-
-Optional extras, all of which the app runs fine without:
-
-| Extra | Gives you | Without it |
-|---|---|---|
-| `pillow-avif-plugin` | AVIF output | AVIF is hidden; WebP is used |
-| `anthropic` | AI alt text | The AI tab explains it is unavailable |
-| `customtkinter` | The desktop GUI | The CLI still works |
-
-Check what your installation can write:
+Then check what your machine can write:
 
 ```bash
 python -m image_optimizer --list-formats
 ```
 
+```
+webp  yes
+avif  yes
+jpeg  yes
+png   yes
+```
+
+If AVIF says `no`, run `pip install pillow-avif-plugin` — you will still get
+WebP without it, just slightly larger files.
+
+**Optional extras.** Everything runs without them:
+
+| Extra | Gives you | Without it |
+|---|---|---|
+| `pillow-avif-plugin` | AVIF output, typically 20–30% smaller than WebP | AVIF is hidden, WebP is used |
+| `anthropic` | AI alt text | The AI tab says it is unavailable |
+| `customtkinter` | The desktop app | The CLI still works |
+
+To install it as a package and get an `image-optimizer` command on your PATH:
+
+```bash
+pip install -e ".[all]"
+```
+
+> **Linux note:** the desktop app needs Tk. If `python image_optimizer_gui.py`
+> reports `No module named 'tkinter'`, install it with
+> `sudo apt install python3-tk` (Debian/Ubuntu) or
+> `sudo dnf install python3-tkinter` (Fedora).
+
 ---
 
-## Using the app
+## Using the desktop app (step by step)
 
 ```bash
 python image_optimizer_gui.py
 ```
 
-1. Pick a **source folder** and an **output folder**.
-2. Pick a **preset** — "Web (recommended)" is the right answer for most sites.
-3. Press **Start optimisation**.
+### 1. Choose your folders and a preset
 
-The **Results** tab fills in as files complete, showing what each image was
-classified as, what settings it got and how much it saved. The **Log** tab has
-the detail. When it finishes, **View report** opens the HTML summary and
-`snippets.html` in the output folder has the markup to paste into your pages.
+![The Quality tab](docs/images/light-01-quality.png)
 
-### Tabs
+* **Source folder** — where your images are. Subfolders are included by default
+  and the structure is preserved in the output.
+* **Output folder** — where the optimised files go. **Use a different folder from
+  your source.** The line underneath tells you how many images were found and
+  what they currently weigh.
+* **Preset** — start here. `Web (recommended)` is right for most sites; the full
+  list is in [Recipes](#recipes). Picking a preset sets everything on the Quality
+  and Output tabs for you.
 
-* **Quality** — mode (Smart / Fixed / Lossless), visual target, encoder effort.
-* **Output** — format, size caps, responsive widths, URL prefix, metadata,
-  parallel workers.
-* **AI alt text** — model, API key, and the site context that steers wording.
+### 2. Adjust anything you need on the Output tab
+
+![The Output tab](docs/images/light-02-output.png)
+
+Most people change two things: **Responsive widths** (the sizes your layout
+actually uses) and **Site URL prefix** (the path images live under on your site,
+so the generated HTML points at the right place).
+
+### 3. Press Start
+
+![A run in progress](docs/images/light-04-running.png)
+
+Results stream in as each file finishes. **Cancel** stops the run — images
+already written stay written.
+
+### 4. Read what it did
+
+![The Results tab](docs/images/light-06-results.png)
+
+Each row shows what the image was classified as, the setting it was given, and
+what that saved. The **Log** tab explains *why* each decision was made:
+
+![The Log tab](docs/images/light-05-log.png)
+
+Then **Open output folder** for the files, or **View report** for the summary
+page.
+
+The app follows your system light/dark setting:
+
+![Dark mode](docs/images/dark-06-results.png)
+
+Your settings, folders and any presets you save are remembered for next time.
 
 ---
 
-## Using the CLI
+## What the settings actually do
+
+### Mode
+
+| Mode | What it does | Use it when |
+|---|---|---|
+| **Smart** | Measures each image and searches for the cheapest quality that still hits your visual target | Almost always — this is the whole point of the tool |
+| **Fixed quality** | One quality value for every image, no measuring | You need the fastest possible run, or you must match an existing pipeline exactly |
+| **Lossless** | Pixel-identical output | Archival copies, or source assets you will edit again later |
+
+### Visual target (Smart mode only)
+
+How close the result must stay to the original, measured as SSIM:
+
+| Target | Keeps | Good for |
+|---|---|---|
+| **Maximum** | ≥ 0.995 | Photography portfolios, print-adjacent work |
+| **High** | ≥ 0.990 | Hero images, product shots |
+| **Balanced** | ≥ 0.980 | Most website imagery — the default |
+| **Smallest** | ≥ 0.965 | Thumbnails, listing grids, background images |
+
+Lower targets mean smaller files. The SSIM the tool actually achieved is
+recorded per image in the Results tab and both reports, so you can check.
+
+### Analyse each image and adapt
+
+Leave this on. It is what sends screenshots down the lossless path and lets busy
+photos compress harder. Turning it off applies your mode and quality uniformly.
+
+### Encoder effort (0–6)
+
+CPU time versus file size. 4 is a good default; 6 is worth it for assets you ship
+once and serve forever. It does not affect image quality, only how hard the
+encoder works to hit it.
+
+### Format
+
+`auto` encodes both AVIF and WebP and keeps whichever came out smaller — the
+right answer unless you have a specific reason. Choose a single format if your
+CDN, CMS or browser support matrix requires one.
+
+### Max width / height, and responsive widths
+
+**Max width/height** caps the largest version. A 6000px camera original has no
+business on a web page; 2000–2400px is plenty for full-bleed.
+
+**Responsive widths** additionally writes a copy at each width you list, so
+phones download a phone-sized file. `hero.jpg` with widths `1600, 800, 400`
+produces `hero.avif`, `hero-1600w.avif`, `hero-800w.avif` and `hero-400w.avif`.
+Widths larger than the source are skipped — it never upscales.
+
+### The rest
+
+* **Include subfolders** — walk the tree, preserving structure.
+* **Skip images whose output is already up to date** — incremental builds. A
+  second run over unchanged files costs one `stat()` per file, not a re-encode.
+* **Strip EXIF and other metadata** — smaller files. Turn it off to keep camera
+  data and copyright tags.
+* **Convert to sRGB before stripping profiles** — leave this on. Without it,
+  images tagged with a wide-gamut profile shift colour when the profile is
+  dropped.
+* **Never write a file larger than the original** — the safety net. If nothing we
+  encode beats your source file, your source file is copied through instead.
+
+---
+
+## Using the output on your site
+
+Optimised files only help if your pages actually reference them, so the tool
+writes the markup for you. With "Write reports" on (or `--markup` on the CLI),
+the output folder gets a `snippets.html` containing one block per image:
+
+```html
+<!-- landscape.jpg -->
+<picture>
+  <source type="image/avif"
+          srcset="/assets/img/landscape-400w.avif 400w,
+                  /assets/img/landscape-800w.avif 800w,
+                  /assets/img/landscape-1200w.avif 1200w,
+                  /assets/img/landscape-1600w.avif 1600w,
+                  /assets/img/landscape.avif 2100w"
+          sizes="100vw">
+  <img src="/assets/img/landscape.avif" width="2100" height="1400"
+       alt="" loading="lazy" decoding="async">
+</picture>
+```
+
+Paste the block for an image where that image goes. What you get for free:
+
+* **`srcset` + `sizes`** so the browser picks the right file for the device.
+* **`width` and `height`** so the browser reserves space and the page does not
+  jump while loading (no layout shift).
+* **`loading="lazy"` and `decoding="async"`** so off-screen images do not block
+  the initial render.
+* **`alt`** — filled in if you enabled [AI alt text](#ai-alt-text-optional),
+  otherwise left empty for you to write.
+
+Set **Site URL prefix** (`--base-url`) to wherever the images will live, so the
+paths are right the first time. Adjust `sizes` to match your layout — `100vw` is
+correct for a full-width image but wrong for one in a sidebar; `--sizes` sets it
+on the CLI.
+
+---
+
+## The reports
+
+Every run can write three files into the output folder:
+
+**`report.html`** — the human summary. Headline numbers, then every file with its
+classification, the setting it was given, the SSIM it achieved and what it saved.
+
+![The HTML report](docs/images/report-light.png)
+
+**`report.json`** — the same data for scripts and CI: per-file settings, sizes,
+scores, the full content analysis, and every variant written.
+
+**`snippets.html`** — the `<picture>` blocks described above.
+
+`--csv` additionally writes a spreadsheet-friendly row per image.
+
+---
+
+## AI alt text (optional)
+
+Compression makes images lighter. It cannot make them *usable*. Missing alt text
+is the most common accessibility failure on the web, it is a WCAG requirement,
+and no encoder setting will fix it — so the tool can write it for you with
+Claude.
+
+![The AI tab](docs/images/light-03-ai.png)
+
+**Setup:** `pip install anthropic`, then set your key:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...      # Windows: setx ANTHROPIC_API_KEY sk-ant-...
+```
+
+or paste it into the API key box. The tab tells you whether it is ready before
+you start a run.
+
+**Site context** is worth filling in. "Independent bookshop in Manila" produces
+noticeably more useful descriptions than no context at all, because it tells the
+model what matters in the picture.
+
+**What you get**, written into `snippets.html` and both reports:
+
+* **Alt text** — one sentence, under 125 characters, describing what the image
+  conveys. Decorative images correctly get *empty* alt text, which is the right
+  answer for a screen reader rather than noise.
+* **A caption** you can use as a figure caption or social description.
+* **An SEO filename suggestion** — files are *not* renamed, since that would
+  break links you already have. The suggestion is in the report.
+
+**Model choice** is yours: Opus 5 for the best descriptions, Haiku 4.5 for
+large batches at lower cost.
+
+> ### Privacy
+>
+> Everything else in this tool runs entirely on your machine with no network
+> access. Turning on AI alt text sends **a downscaled copy of each image**
+> (max 768px, as JPEG) to the Anthropic API. It is **off by default**, and your
+> API key is **never written to the config file**. Do not enable it for images
+> you cannot share with a third-party service.
+
+---
+
+## Using the command line
+
+Same engine, same presets, scriptable — for build pipelines and CI.
 
 ```bash
 # The common case
 python -m image_optimizer ./images ./dist
 
-# Responsive set plus the markup to serve it
+# A responsive set plus the markup to serve it
 python -m image_optimizer ./images ./dist \
     --widths 1600,1200,800,400 --markup --base-url /assets/img
 
@@ -168,21 +353,60 @@ python -m image_optimizer ./images ./dist \
 python -m image_optimizer ./images ./dist \
     --preset "E-commerce product shots" --html report.html --json report.json
 
-# Incremental rebuild - unchanged files are stat'd, not re-encoded
+# Incremental rebuild - unchanged files are skipped without re-encoding
 python -m image_optimizer ./images ./dist --skip-existing
 
-# With alt text
-export ANTHROPIC_API_KEY=sk-ant-...
-python -m image_optimizer ./images ./dist --alt-text \
-    --ai-context "Independent bookshop in Manila" --markup
+# See what would happen, change nothing
+python -m image_optimizer ./images ./dist --dry-run
 ```
 
-`--dry-run` lists what would be processed. `--list-presets` shows the presets.
+Typical output with `--verbose`:
+
+```
+Optimising 5 image(s) with 4 worker(s)...
+  [1/5] logo.png: 13.0 KiB -> 3.9 KiB (-69.8%) webp lossless
+  [2/5] banner.png: 931.8 KiB -> 28.4 KiB (-97.0%) avif q54 ssim 0.9951
+  [3/5] dashboard.png: 142.5 KiB -> 20.2 KiB (-85.8%) webp lossless
+  [4/5] portrait.jpg: 253.1 KiB -> 33.7 KiB (-86.7%) avif q48 ssim 0.9849
+  [5/5] landscape.jpg: 699.4 KiB -> 74.6 KiB (-89.3%) avif q52 ssim 0.9923
+Optimised 5 image(s) in 5.8s
+  2.0 MiB -> 160.8 KiB (92.1% smaller, 1.8 MiB saved)
+```
+
 The exit code is non-zero if any file failed, so it works as a CI gate.
+
+<details>
+<summary><strong>All options</strong></summary>
+
+| Flag | Does |
+|---|---|
+| `--preset NAME` | Start from a preset (`--list-presets` to see them) |
+| `-f, --format` | `auto`, `webp`, `avif`, `jpeg`, `png` |
+| `-m, --mode` | `smart`, `fixed`, `lossless` |
+| `-t, --target` | `maximum`, `high`, `balanced`, `small` |
+| `-q, --quality N` | Quality for `fixed` mode |
+| `-e, --effort 0-6` | Encoder CPU budget |
+| `--no-auto` | Disable per-image content analysis |
+| `--max-width N`, `--max-height N` | Cap the largest output |
+| `--widths 1600,800,400` | Also write these responsive widths |
+| `--keep-metadata` | Keep EXIF and colour profiles |
+| `--allow-larger` | Write output even if bigger than the source |
+| `--skip-existing` | Incremental builds |
+| `--no-recursive` | Do not descend into subfolders |
+| `-j, --workers N` | Parallel workers |
+| `--json`, `--csv`, `--html` | Write reports to these paths |
+| `--markup [PATH]` | Write `<picture>` snippets |
+| `--base-url`, `--sizes` | Fill in the markup correctly |
+| `--alt-text` | Generate alt text with Claude |
+| `--ai-model`, `--ai-context`, `--ai-concurrency` | Tune that |
+| `--dry-run`, `-v`, `--quiet` | Run control |
+| `--list-presets`, `--list-formats` | Inspect and exit |
+
+</details>
 
 ---
 
-## Using it as a library
+## Using it from Python
 
 ```python
 from image_optimizer import OptimizeSettings, run_batch
@@ -191,68 +415,97 @@ summary = run_batch(
     'src/images', 'dist/images',
     OptimizeSettings(output_format='auto', target='balanced',
                      widths=(1600, 800, 400)),
-    progress=lambda p: print(f'{p.done}/{p.total}'),
+    progress=lambda p: print(f'{p.done}/{p.total} {p.current}'),
 )
-print(f'{summary.saved_ratio:.0%} smaller')
+
+print(f'{summary.saved_ratio:.0%} smaller, {summary.saved_bytes:,} bytes saved')
+for result in summary.succeeded:
+    print(result.source, '->', result.primary.path, result.primary.score)
 ```
 
-`optimize_file()` handles a single image, `analyze()` returns the content
-classification, and `ssim()` is available on its own if you want to score
-encodes yourself.
+Also available: `optimize_file()` for a single image, `analyze()` for just the
+content classification, and `ssim()` on its own if you want to score encodes
+yourself.
 
 ---
 
-## Presets
+## Recipes
 
-| Preset | For |
+| Preset | What it sets | Reach for it when |
+|---|---|---|
+| **Web (recommended)** | Smart, Balanced, `auto` format | Any normal website folder |
+| **Hero / full-bleed** | Smart, High, capped 2400px, widths 2400/1600/1200/800 | Large above-the-fold imagery |
+| **Thumbnails** | Smart, Smallest, WebP, capped 400px | Listing grids, avatars |
+| **E-commerce product shots** | Smart, High, capped 2000px, widths 2000/1200/800/400 | Product galleries with zoom |
+| **Maximum compression** | Smart, Smallest, effort 6 | Bandwidth matters more than fine detail |
+| **Lossless / archival** | Lossless, metadata kept | Master copies you will edit again |
+| **Legacy JPEG only** | Smart, JPEG output | A pipeline that cannot serve WebP or AVIF |
+
+Configure anything you like and press **Save as...** to add your own. Presets are
+plain JSON in the config file, so a team can share one:
+
+| OS | Config file |
 |---|---|
-| Web (recommended) | Most sites. Smart quality, AVIF/WebP, sensible defaults. |
-| Hero / full-bleed | Large above-the-fold imagery, high target, responsive set. |
-| Thumbnails | Small and aggressive, capped at 400px. |
-| E-commerce product shots | Detail-preserving, with a full gallery width set. |
-| Maximum compression | Smallest files that still clear a visible-quality floor. |
-| Lossless / archival | Pixel-identical. Metadata and colour profiles kept. |
-| Legacy JPEG only | Pipelines that can't serve WebP or AVIF yet. |
+| Linux | `~/.config/web-image-optimizer/config.json` |
+| macOS | `~/Library/Application Support/web-image-optimizer/config.json` |
+| Windows | `%APPDATA%\web-image-optimizer\config.json` |
 
-Configure anything you like and **Save as...** to add your own. Presets live in
-plain JSON (`~/.config/web-image-optimizer/config.json` on Linux,
-`%APPDATA%` on Windows, `~/Library/Application Support` on macOS) so a team can
-share one.
+**In a build pipeline**, `--skip-existing` plus a committed output folder means
+only changed images are re-encoded:
 
----
-
-## Privacy
-
-Everything except AI alt text runs entirely on your machine — no network calls.
-
-Turning on AI alt text sends **a downscaled copy of each image** (max 768px, as
-JPEG) to the Anthropic API. It is off by default, the API key is read from
-`ANTHROPIC_API_KEY` unless you paste one in, and **the key is never written to
-the config file**. Don't enable it for images you can't share with a third-party
-service.
+```bash
+python -m image_optimizer src/images public/img \
+    --preset "Web (recommended)" --widths 1600,800,400 \
+    --skip-existing --markup --base-url /img --quiet
+```
 
 ---
 
-## Supported formats
+## Troubleshooting
 
-**Input:** JPG/JPEG, PNG, WebP, AVIF, TIFF, BMP, GIF, PPM
-**Output:** WebP, AVIF, JPEG, PNG
+**"No module named 'tkinter'"** — Tk is not installed for your Python. See the
+Linux note under [Install](#install). The CLI works regardless.
+
+**AVIF is missing from the format list** — `pip install pillow-avif-plugin`, or
+upgrade to Pillow 11.3+ which includes it.
+
+**A file came out *bigger*** — it can't, unless you passed `--allow-larger`. When
+nothing we encode beats your source, the source is copied through and the report
+says so. This happens with images that were already optimised.
+
+**It is slower than I expected** — Smart mode encodes each image several times on
+purpose. Lower the effort slider, use `--skip-existing` for rebuilds, or switch
+to Fixed quality mode if you want the speed of blind conversion.
+
+**Photos came out sideways in my old pipeline** — this version applies EXIF
+orientation, so they won't here.
+
+**Colours look washed out after optimising elsewhere** — that is a colour profile
+being dropped rather than converted. Keep "Convert to sRGB before stripping
+profiles" on, which is the default here.
+
+**"the model declined to describe this image"** — the alt-text request was
+refused for that one image. The optimised file is unaffected; write that alt text
+by hand.
 
 ---
 
 ## Limitations
 
-* Animated GIF/WebP is passed through at a fixed quality — the perceptual
-  search runs on still images only.
-* SSIM is a good, cheap proxy for visible difference, not a perfect model of
-  human vision. On very noisy or grainy sources no quality setting reaches a
-  high target, so the tool falls back to the content analyser's recommendation
-  rather than burning bytes chasing a score it can't hit.
-* Smart mode encodes each image several times; it is several times slower than
-  fixed-quality conversion. That is the cost of the file sizes above.
-* SEO filenames are *suggested* in the reports; files are not renamed, since
-  renaming would break links you already have.
+* Animated GIF/WebP is passed through at a fixed quality — the perceptual search
+  runs on still images only.
+* SSIM is a good, cheap proxy for visible difference, not a model of human
+  vision. On very grainy or noisy sources no quality setting reaches a high
+  target, so the tool falls back to the content analyser's recommendation rather
+  than burning bytes chasing a score it cannot hit.
+* Smart mode is several times slower than fixed-quality conversion. That is the
+  cost of the file sizes above.
+* SEO filenames are *suggested*, not applied — renaming would break existing
+  links.
 * CMYK and 16-bit-per-channel sources are converted to 8-bit sRGB.
+
+**Supported input:** JPG/JPEG, PNG, WebP, AVIF, TIFF, BMP, GIF, PPM
+**Output:** WebP, AVIF, JPEG, PNG
 
 ---
 
@@ -263,13 +516,10 @@ pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-119 tests cover the perceptual metric, the content classifier, the encoder
-(including EXIF orientation, alpha handling and the never-larger guarantee),
-batch execution and cancellation, the reports and markup, presets, the CLI, and
-the AI layer against a fake client.
-
-The GUI is a thin layer over the `image_optimizer` package — all decisions live
-in the package, which is what the tests exercise.
+123 tests cover the perceptual metric, the content classifier, the encoder
+(EXIF orientation, alpha handling, the never-larger guarantee), batch execution
+and cancellation, the reports and markup, presets, the CLI, and the AI layer
+against a fake client.
 
 ```
 image_optimizer/
@@ -281,17 +531,18 @@ image_optimizer/
     ai.py         optional Claude alt text
     config.py     presets and persisted preferences
     cli.py        command line
-image_optimizer_gui.py    desktop app
+image_optimizer_gui.py    desktop app - a thin layer over the package
 ```
+
+All decisions live in the package, which is what the tests exercise; the GUI only
+collects settings and renders results.
 
 ---
 
 ## Contributing
 
-Issues and pull requests are welcome. Please run `python -m pytest` before
-opening a PR, and add a test for anything that changes encoder behaviour.
-
----
+Issues and pull requests welcome. Please run `python -m pytest` before opening a
+PR, and add a test for anything that changes encoder behaviour.
 
 ## License
 
@@ -302,5 +553,5 @@ MIT — see [LICENSE.md](LICENSE.md).
 This software is provided "AS IS", without warranty of any kind, express or
 implied. The author, Lewis John Villamor, is not liable for any claim, damages,
 or other liability arising from, out of, or in connection with the software.
-Keep backups of your originals, especially when the input and output folders
-are the same.
+Keep backups of your originals, especially when the input and output folders are
+the same.

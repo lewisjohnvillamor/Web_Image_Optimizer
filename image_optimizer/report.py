@@ -187,7 +187,8 @@ table { border-collapse:collapse; width:100%; font-size:13px; }
 th,td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line);
         vertical-align:top; }
 th { color:var(--muted); font-weight:600; font-size:12px; text-transform:uppercase; }
-td.num { text-align:right; font-variant-numeric:tabular-nums; }
+td.num { text-align:right; font-variant-numeric:tabular-nums;
+         white-space:nowrap; }
 .good { color:var(--good); } .bad { color:var(--bad); }
 .bar { height:6px; background:var(--line); border-radius:3px; overflow:hidden;
        min-width:70px; }
@@ -210,6 +211,7 @@ def write_html_report(summary: BatchSummary, path: str) -> str:
         primary = result.primary
         pct = result.saved_ratio * 100
         cls = 'good' if pct >= 0 else 'bad'
+        saved_text = f'{pct:.1f}%' if pct >= 0 else f'+{-pct:.1f}% bigger'
         kind = html.escape(result.stats.kind_label if result.stats else '')
         setting = (f'{primary.format_key} '
                    f'{"lossless" if primary.lossless else f"q{primary.quality}"}'
@@ -222,7 +224,7 @@ def write_html_report(summary: BatchSummary, path: str) -> str:
             f'<td class="num">{ssim}</td>'
             f'<td class="num">{format_bytes(result.original_size)}</td>'
             f'<td class="num">{format_bytes(result.new_size)}</td>'
-            f'<td class="num {cls}">{pct:+.1f}%<div class="bar">'
+            f'<td class="num {cls}">{saved_text}<div class="bar">'
             f'<i style="width:{max(0, min(100, pct)):.0f}%"></i></div>'
             f'<div class="reason">{variants} file(s)</div></td></tr>')
 
@@ -250,7 +252,7 @@ def write_html_report(summary: BatchSummary, path: str) -> str:
 <div class="sub">{html.escape(summary.input_root)} &rarr; {html.escape(summary.output_root)}</div>
 <div class="cards">{card_html}</div>
 <table><thead><tr><th>File</th><th>Content</th><th>Encoded as</th>
-<th>SSIM</th><th>Before</th><th>After</th><th>Change</th></tr></thead>
+<th>SSIM</th><th>Before</th><th>After</th><th>Saved</th></tr></thead>
 <tbody>{''.join(rows)}</tbody></table>
 </body></html>
 """

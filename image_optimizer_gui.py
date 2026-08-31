@@ -389,7 +389,7 @@ class ImageOptimizerApp(ctk.CTk):
         head.grid(row=0, column=0, sticky='ew', padx=6, pady=(6, 0))
         for index, (text, width) in enumerate((('File', 320), ('Content', 130),
                                                ('Encoded as', 130), ('Before', 90),
-                                               ('After', 90), ('Change', 90))):
+                                               ('After', 90), ('Saved', 90))):
             ctk.CTkLabel(head, text=text, width=width, anchor='w',
                          font=ctk.CTkFont(size=12, weight='bold'),
                          text_color=('gray40', 'gray65')
@@ -650,7 +650,9 @@ class ImageOptimizerApp(ctk.CTk):
                 f'{", ".join(fmt.INPUT_EXTENSIONS)}', parent=self)
             return
 
-        self._clear_results()
+        self._clear_results(
+            f'Optimising {len(files)} image(s) - each one appears here as it '
+            f'finishes...')
         self.start_button.configure(state='disabled', text='Optimising...')
         self.cancel_button.configure(state='normal')
         self.open_button.configure(state='disabled')
@@ -659,6 +661,7 @@ class ImageOptimizerApp(ctk.CTk):
         self.status_label.configure(text=f'Starting on {len(files)} image(s)...')
         self.savings_label.configure(text='')
         self.tabs.set('Results')
+        self.update_idletasks()
 
         self.cancel_event = threading.Event()
         self.worker = threading.Thread(
@@ -746,6 +749,32 @@ class ImageOptimizerApp(ctk.CTk):
             text=f'{progress.done} of {progress.total}{eta_text}')
         if progress.result:
             self._append_result_row(progress.result)
+            self._log_result(progress.result)
+
+    def _log_result(self, result: FileResult) -> None:
+        name = os.path.relpath(result.source, self.input_path_var.get())
+        if not result.ok:
+            logger.error(f'{name}: {result.error}')
+            return
+        if result.skipped:
+            logger.info(f'{name}: {result.note or "skipped"}')
+            return
+        primary = result.primary
+        detail = ''
+        if primary:
+            detail = (f' | {primary.format_key} '
+                      f'{"lossless" if primary.lossless else f"quality {primary.quality}"}')
+            if primary.score is not None:
+                detail += f', SSIM {primary.score:.4f}'
+        if len(result.variants) > 1:
+            detail += f' | {len(result.variants)} variants'
+        logger.info(f'{name}: {report.format_bytes(result.original_size)} -> '
+                    f'{report.format_bytes(result.new_size)} '
+                    f'({result.saved_ratio * 100:.1f}% smaller){detail}')
+        if result.decision:
+            logger.info(f'    {result.decision}')
+        if result.note:
+            logger.info(f'    {result.note}')
 
     def _append_result_row(self, result: FileResult) -> None:
         if self.results_placeholder is not None:
@@ -772,13 +801,19 @@ class ImageOptimizerApp(ctk.CTk):
                            f'{"lossless" if primary.lossless else f"q{primary.quality}"}')
             pct = result.saved_ratio * 100
             color = ('#1a7f4b', '#4ec98a') if pct >= 0 else ('#b23c17', '#ef8b63')
+            if result.skipped:
+                saved_text = 'skipped'
+            elif pct >= 0:
+                saved_text = f'{pct:.1f}%'
+            else:
+                saved_text = f'+{-pct:.1f}% bigger'
             cells = (
                 (name, 320, 'w', None),
                 (result.stats.kind_label if result.stats else '', 130, 'w', None),
                 (encoded, 130, 'w', None),
                 (report.format_bytes(result.original_size), 90, 'e', None),
                 (report.format_bytes(result.new_size), 90, 'e', None),
-                (f'{pct:+.1f}%' if not result.skipped else 'skipped', 90, 'e', color),
+                (saved_text, 90, 'e', color),
             )
             for column, (text, width, anchor, text_color) in enumerate(cells):
                 kwargs = {'text_color': text_color} if text_color else {}
@@ -796,11 +831,18 @@ class ImageOptimizerApp(ctk.CTk):
                 text=f'{report.format_bytes(saved)} saved '
                      f'({saved / running_before * 100:.0f}%)')
 
-    def _clear_results(self) -> None:
+    def _clear_results(self, message: str = '') -> None:
         for child in self.results_frame.winfo_children():
             child.destroy()
         self.result_rows = []
-        self.results_placeholder = None
+        # A tab that has never been shown does not paint until something is
+        # added to it, so an empty Results tab looks broken at the start of a
+        # run. Always keep a placeholder until the first result lands.
+        self.results_placeholder = ctk.CTkLabel(
+            self.results_frame, text=message or 'Run an optimisation to see '
+                                                'per-file results.',
+            text_color=('gray40', 'gray65'))
+        self.results_placeholder.grid(row=0, column=0, pady=20)
         self.log_textbox.configure(state='normal')
         self.log_textbox.delete('1.0', 'end')
         self.log_textbox.configure(state='disabled')

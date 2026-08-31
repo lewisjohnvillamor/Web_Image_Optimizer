@@ -16,6 +16,15 @@ import numpy as np
 from PIL import Image
 
 ANALYSIS_THUMB = 256
+# Edge density gets its own, larger working size. At 256px the text in a
+# 1600px UI capture has blurred into flat colour and the image looks like a
+# logo; at 768px the glyph edges survive. Measuring the whole frame (rather
+# than sampled patches) keeps the result independent of where content sits.
+DETAIL_MAX_DIM = 768
+# Above this fraction of pixels sitting on a hard edge, an image that is
+# otherwise flat is text rather than artwork. Screenshots measure ~0.026-0.04
+# here; logos, illustrations and photos stay under 0.010.
+TEXT_EDGE_THRESHOLD = 0.018
 
 PHOTO = 'photo'
 ILLUSTRATION = 'illustration'
@@ -72,6 +81,28 @@ def _thumbnail_array(img: Image.Image) -> np.ndarray:
     return np.asarray(small, dtype=np.float32)
 
 
+def _detail_edge_density(img: Image.Image) -> float:
+    """Fraction of pixels sitting on a hard edge, measured at DETAIL_MAX_DIM.
+
+    Small hard edges spread through a frame mean text; a logo puts its few
+    edges around one shape and a photograph has almost none.
+    """
+    try:
+        rgb = img.convert('RGB')
+        if max(rgb.size) > DETAIL_MAX_DIM:
+            rgb = rgb.copy()
+            rgb.thumbnail((DETAIL_MAX_DIM, DETAIL_MAX_DIM), Image.Resampling.BILINEAR)
+        arr = np.asarray(rgb, dtype=np.float32)
+    except Exception:
+        return 0.0
+    if arr.ndim != 3 or arr.shape[0] < 2 or arr.shape[1] < 2:
+        return 0.0
+    gray = arr @ np.array([0.299, 0.587, 0.114], dtype=np.float32)
+    dx = np.abs(np.diff(gray, axis=1))
+    dy = np.abs(np.diff(gray, axis=0))
+    return float(((dx > 40).mean() + (dy > 40).mean()) / 2.0)
+
+
 def analyze(img: Image.Image) -> ImageStats:
     """Classify an opened Pillow image. Never raises on odd inputs."""
     width, height = img.size
@@ -114,7 +145,7 @@ def analyze(img: Image.Image) -> ImageStats:
     dx = np.abs(np.diff(gray, axis=1))
     dy = np.abs(np.diff(gray, axis=0))
     flat_ratio = float(((dx < 1.0).mean() + (dy < 1.0).mean()) / 2.0)
-    edge_density = float(((dx > 40).mean() + (dy > 40).mean()) / 2.0)
+    edge_density = _detail_edge_density(img)
     high_frequency = float(min(1.0, (dx.mean() + dy.mean()) / 2.0 / 32.0))
 
     kind = _classify(unique_colors, flat_ratio, edge_density, high_frequency,
@@ -130,7 +161,7 @@ def _classify(unique_colors: int, flat_ratio: float, edge_density: float,
     # Large flat regions + hard edges = something drawn, not photographed.
     drawn = flat_ratio > 0.55 or unique_colors < 900
 
-    if drawn and edge_density > 0.045:
+    if drawn and edge_density > TEXT_EDGE_THRESHOLD:
         # Lots of tiny hard edges on flat ground: UI text.
         return TEXT_SCREENSHOT
     if drawn and (unique_colors < 400 or flat_ratio > 0.75):
