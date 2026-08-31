@@ -1,2 +1,13 @@
-customtkinter>=5.0.0
-Pillow>=9.0.0
+# Core
+customtkinter>=5.2.0
+Pillow>=10.0.0
+numpy>=1.22.0
+
+# Optional but recommended
+# AVIF output (typically 20-30% smaller than WebP). Not needed on Pillow >= 11.3,
+# which has AVIF built in.
+pillow-avif-plugin>=1.4.0
+
+# Optional: AI alt-text generation. Without it the app runs normally and the
+# AI tab reports that it is unavailable.
+anthropic>=0.40.0
