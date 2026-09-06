@@ -100,7 +100,16 @@ def _detail_edge_density(img: Image.Image) -> float:
     gray = arr @ np.array([0.299, 0.587, 0.114], dtype=np.float32)
     dx = np.abs(np.diff(gray, axis=1))
     dy = np.abs(np.diff(gray, axis=0))
-    return float(((dx > 40).mean() + (dy > 40).mean()) / 2.0)
+    density = float(((dx > 40).mean() + (dy > 40).mean()) / 2.0)
+
+    # Edge density is a fraction of pixels, and an outline is one pixel wide
+    # whatever the image size - so the same logo scores 3x higher at 150px
+    # than at 600px and gets mistaken for text. Normalise to the working size
+    # so the threshold means the same thing for a favicon and a hero.
+    longest = max(rgb.size)
+    if longest < DETAIL_MAX_DIM:
+        density *= longest / DETAIL_MAX_DIM
+    return density
 
 
 def analyze(img: Image.Image) -> ImageStats:

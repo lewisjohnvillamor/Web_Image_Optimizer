@@ -59,6 +59,14 @@ FORMATS: Dict[str, FormatSpec] = {
     ),
 }
 
+# Vector output. Deliberately not in FORMATS: it is produced by tracing, not
+# by encoding pixels, and is only ever written alongside a raster fallback.
+SVG_SPEC = FormatSpec(
+    key='svg', label='SVG', pil_format='SVG', extension='.svg',
+    supports_alpha=True, supports_lossless=True, supports_animation=False,
+    mime='image/svg+xml',
+)
+
 # Order matters: 'auto' tries these and keeps the smallest result.
 AUTO_CANDIDATES: Tuple[str, ...] = ('avif', 'webp')
 
@@ -91,6 +99,8 @@ def auto_candidates() -> Tuple[str, ...]:
 
 
 def resolve(format_key: str) -> FormatSpec:
+    if format_key.lower() == SVG_SPEC.key:
+        return SVG_SPEC
     try:
         return FORMATS[format_key.lower()]
     except KeyError:

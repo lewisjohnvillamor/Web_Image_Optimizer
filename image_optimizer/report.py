@@ -124,6 +124,15 @@ def picture_markup(result: FileResult, output_root: str, base_url: str = '',
 
     lines = ['<picture>']
     fallback: Optional[Variant] = None
+
+    # A vector goes first: browsers take the first <source> they support, and
+    # every browser supports SVG, so it wins wherever it exists. One file
+    # serves every width, so it needs no srcset.
+    vector = by_format.pop('svg', None)
+    if vector:
+        lines.append(f'  <source type="{vector[0].mime}" '
+                     f'srcset="{_web_path(vector[0].path, output_root, base_url)}">')
+
     for format_key, variants in by_format.items():
         variants = sorted(variants, key=lambda v: v.width)
         fallback = fallback or variants[-1]
@@ -216,6 +225,8 @@ def write_html_report(summary: BatchSummary, path: str) -> str:
         setting = (f'{primary.format_key} '
                    f'{"lossless" if primary.lossless else f"q{primary.quality}"}'
                    ) if primary else ''
+        if result.vector:
+            setting += ' + svg'
         ssim = f'{primary.score:.4f}' if primary and primary.score is not None else '&mdash;'
         variants = len(result.variants)
         rows.append(

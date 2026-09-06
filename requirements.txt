@@ -11,3 +11,8 @@ pillow-avif-plugin>=1.4.0
 # Optional: AI alt-text generation. Without it the app runs normally and the
 # AI tab reports that it is unavailable.
 anthropic>=0.40.0
+
+# Optional: SVG output for logos and flat graphics. Both are self-contained
+# wheels with no system dependencies. Without them the SVG option is hidden.
+vtracer>=0.6.11
+resvg-py>=0.1.0
