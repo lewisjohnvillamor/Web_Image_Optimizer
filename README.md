@@ -326,6 +326,36 @@ Everything else — photos, screenshots, illustrations, gradients — is refused
 before any tracing happens. A tracer given a photo produces megabytes of
 noise; the classifier already knows not to ask.
 
+### Look before you trust it
+
+The gate decides whether an SVG is *written*; you decide whether it is
+*right*. Any row that was traced — or was eligible and refused — gets a
+**Preview SVG** button:
+
+![The SVG preview window](docs/images/preview-zoom4.png)
+
+Left is the source raster scaled the way a browser would scale it; right is
+the SVG rendered live at the chosen zoom. At 1× they look the same. At 4× the
+raster goes soft and the vector stays crisp — that is the whole reason to
+want one. Click either image to centre on a spot.
+
+Flip **Show difference** and the right pane becomes the source subtracted
+from the trace, amplified: black means identical, and a wrong colour or a
+lost detail shows up as a bright region instead of something you have to
+hunt for.
+
+![Difference view: only antialiased edges light up](docs/images/preview-diff.png)
+
+The gate's numbers sit underneath — SSIM, share of off-colour pixels, path
+and colour counts, both file sizes — and three buttons:
+
+* **Keep SVG** writes the candidate (or confirms one already written).
+* **Discard SVG** deletes it and takes it out of the markup and reports.
+* **Re-trace** at a different **fidelity gate**. A logo the run refused at
+  0.95 can be traced at 0.90 and *looked at* — a far better way to decide
+  than guessing a number on the command line. Refused logos open straight
+  into this state, with the candidate shown so you can judge it.
+
 What you get:
 
 * `logo.svg` next to `logo.webp`. The raster is always still written and
@@ -578,11 +608,13 @@ pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-149 tests cover the perceptual metric, the content classifier, the encoder
+163 tests cover the perceptual metric, the content classifier, the encoder
 (EXIF orientation, alpha handling, the never-larger guarantee), batch execution
 and cancellation, the reports and markup, presets, the CLI, the AI layer
-against a fake client, and the SVG tracer's gate (what is refused, what is
-kept, and that a kept SVG re-renders to match its source).
+against a fake client, the SVG tracer's gate (what is refused, what is
+kept, and that a kept SVG re-renders to match its source), and the preview's
+rendering (pane alignment, the difference view, region rendering that does
+not slow down with zoom).
 
 ```
 image_optimizer/
@@ -593,6 +625,7 @@ image_optimizer/
     report.py     JSON/CSV/HTML reports and <picture> markup
     ai.py         optional Claude alt text
     vectorize.py  optional SVG tracing for flat graphics, with a fidelity gate
+    preview.py    side-by-side raster/SVG panes, diff view, keep/discard/re-trace
     config.py     presets and persisted preferences
     cli.py        command line
 image_optimizer_gui.py    desktop app - a thin layer over the package

@@ -25,6 +25,9 @@ from image_optimizer import config as config_module
 from image_optimizer import formats as fmt
 from image_optimizer import report
 from image_optimizer import vectorize as vector_module
+from image_optimizer.preview import TracePreview, ZOOM_LEVELS
+from image_optimizer.engine import Variant, output_path_for
+from image_optimizer import formats as fmt_module
 from image_optimizer.batch import (BatchProgress, BatchSummary, default_workers,
                                    discover, run_batch)
 from image_optimizer.engine import MODE_FIXED, MODE_LOSSLESS, MODE_SMART, FileResult
@@ -70,6 +73,216 @@ def open_in_file_manager(path: str) -> None:
             subprocess.Popen(['xdg-open', path])
     except Exception as exc:
         logger.warning(f'Could not open {path}: {exc}')
+
+
+class SvgPreviewWindow(ctk.CTkToplevel):
+    """Left: the source raster. Right: the SVG rendered live at the chosen
+    zoom. Keep or discard the file; re-trace at a different fidelity gate
+    when the automated one refused."""
+
+    PANE = (440, 330)
+
+    def __init__(self, app: 'ImageOptimizerApp', result: FileResult) -> None:
+        super().__init__(app)
+        self.app = app
+        self.result = result
+        self.zoom = 2
+        self.diff = False
+        self.centre = None      # source-pixel coords; set after load
+        self._rendering = False
+        self._pending = False
+
+        name = os.path.basename(result.source)
+        self.title(f'SVG preview - {name}')
+        self.geometry('980x640')
+        self.minsize(900, 600)
+        self.grid_columnconfigure((0, 1), weight=1)
+        self.grid_rowconfigure(1, weight=1)
+
+        svg_bytes = None
+        vector = result.vector
+        if vector and os.path.exists(vector.path):
+            with open(vector.path, 'rb') as fh:
+                svg_bytes = fh.read()
+        primary = result.primary
+        self.preview = TracePreview(result.source, svg=svg_bytes,
+                                    raster_bytes=primary.size if primary else 0,
+                                    settings=app.settings)
+        w, h = self.preview.source.size
+        self.centre = (w / 2, h / 2)
+
+        ctk.CTkLabel(self, text='Source (raster, scaled like a browser would)',
+                     font=ctk.CTkFont(size=12, weight='bold')
+                     ).grid(row=0, column=0, padx=12, pady=(10, 2), sticky='w')
+        self.right_title = ctk.CTkLabel(self, text='Traced SVG (rendered at this zoom)',
+                                        font=ctk.CTkFont(size=12, weight='bold'))
+        self.right_title.grid(row=0, column=1, padx=12, pady=(10, 2), sticky='w')
+
+        self.left_pane = ctk.CTkLabel(self, text='')
+        self.left_pane.grid(row=1, column=0, padx=(12, 6), pady=2, sticky='nsew')
+        self.right_pane = ctk.CTkLabel(self, text='')
+        self.right_pane.grid(row=1, column=1, padx=(6, 12), pady=2, sticky='nsew')
+        for pane in (self.left_pane, self.right_pane):
+            pane.bind('<Button-1>', self._on_click)
+
+        ctk.CTkLabel(self, text='Click either image to centre the view on that spot.',
+                     text_color=('gray40', 'gray65'), font=ctk.CTkFont(size=11)
+                     ).grid(row=2, column=0, columnspan=2, padx=12, sticky='w')
+
+        controls = ctk.CTkFrame(self, fg_color='transparent')
+        controls.grid(row=3, column=0, columnspan=2, padx=12, pady=(6, 4), sticky='ew')
+        ctk.CTkLabel(controls, text='Zoom').pack(side='left')
+        self.zoom_button = ctk.CTkSegmentedButton(
+            controls, values=[f'{z}x' for z in ZOOM_LEVELS], command=self._on_zoom)
+        self.zoom_button.set(f'{self.zoom}x')
+        self.zoom_button.pack(side='left', padx=(8, 20))
+        self.diff_var = ctk.BooleanVar(value=False)
+        ctk.CTkSwitch(controls, text='Show difference (black = identical)',
+                      variable=self.diff_var, command=self._on_diff).pack(side='left')
+
+        self.stats_label = ctk.CTkLabel(self, text='', anchor='w', justify='left',
+                                        font=ctk.CTkFont(size=12))
+        self.stats_label.grid(row=4, column=0, columnspan=2, padx=12, pady=(2, 4), sticky='w')
+
+        actions = ctk.CTkFrame(self, fg_color='transparent')
+        actions.grid(row=5, column=0, columnspan=2, padx=12, pady=(4, 12), sticky='ew')
+        actions.grid_columnconfigure(2, weight=1)
+        ctk.CTkLabel(actions, text='Fidelity gate').grid(row=0, column=0, sticky='w')
+        self.gate_var = ctk.DoubleVar(value=app.settings.vector_min_score)
+        self.gate_slider = ctk.CTkSlider(actions, from_=0.80, to=0.99, number_of_steps=19,
+                                         variable=self.gate_var, width=160,
+                                         command=lambda v: self.gate_label.configure(
+                                             text=f'{float(v):.2f}'))
+        self.gate_slider.grid(row=0, column=1, padx=8)
+        self.gate_label = ctk.CTkLabel(actions, text=f'{self.gate_var.get():.2f}', width=40)
+        self.gate_label.grid(row=0, column=2, sticky='w')
+        ctk.CTkButton(actions, text='Re-trace', width=100, command=self._retrace
+                      ).grid(row=0, column=3, padx=(0, 16))
+        self.keep_button = ctk.CTkButton(actions, text='Keep SVG', width=110,
+                                         command=self._keep)
+        self.keep_button.grid(row=0, column=4, padx=(0, 8))
+        self.discard_button = ctk.CTkButton(actions, text='Discard SVG', width=110,
+                                            fg_color='gray40', hover_color='gray30',
+                                            command=self._discard)
+        self.discard_button.grid(row=0, column=5)
+
+        self._refresh_stats()
+        if not self.preview.has_candidate:
+            # The run refused it; show the candidate anyway so the person can judge.
+            self.after(50, self._retrace_ignoring_gate)
+        else:
+            self._redraw()
+
+    # -- events ------------------------------------------------------------
+    def _on_zoom(self, value: str) -> None:
+        self.zoom = int(value.rstrip('x'))
+        self._redraw()
+
+    def _on_diff(self) -> None:
+        self.diff = bool(self.diff_var.get())
+        self.right_title.configure(text='Difference from source (amplified 9x)'
+                                   if self.diff else 'Traced SVG (rendered at this zoom)')
+        self._redraw()
+
+    def _on_click(self, event) -> None:
+        box = self.preview.region_box(self.zoom, self.centre, self.PANE)
+        self.centre = (box[0] + event.x / self.zoom, box[1] + event.y / self.zoom)
+        self._redraw()
+
+    def _retrace(self) -> None:
+        self._run_trace(float(self.gate_var.get()))
+
+    def _retrace_ignoring_gate(self) -> None:
+        self._run_trace(0.0)
+
+    def _run_trace(self, min_score: float) -> None:
+        self.stats_label.configure(text='Tracing...')
+
+        def work():
+            self.preview.retrace(min_score)
+            self.after(0, self._after_trace)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _after_trace(self) -> None:
+        self._refresh_stats()
+        self._redraw()
+
+    # -- drawing -----------------------------------------------------------
+    def _redraw(self) -> None:
+        if self._rendering:
+            self._pending = True
+            return
+        self._rendering = True
+        zoom, centre, diff = self.zoom, self.centre, self.diff
+
+        def work():
+            try:
+                left, right = self.preview.viewport(zoom, centre, self.PANE, diff)
+            except Exception as exc:
+                logger.error(f'Preview render failed: {type(exc).__name__}: {exc}')
+                left = right = None
+            self.after(0, self._show, left, right)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show(self, left, right) -> None:
+        self._rendering = False
+        if left is not None:
+            self._left_image = ctk.CTkImage(light_image=left, dark_image=left, size=left.size)
+            self._right_image = ctk.CTkImage(light_image=right, dark_image=right,
+                                             size=right.size)
+            self.left_pane.configure(image=self._left_image)
+            self.right_pane.configure(image=self._right_image)
+        if self._pending:
+            self._pending = False
+            self._redraw()
+
+    def _refresh_stats(self) -> None:
+        st = self.preview.stats_summary()
+        if not self.preview.has_candidate:
+            self.stats_label.configure(text=f'No SVG: {st.reason}')
+            self.keep_button.configure(state='disabled')
+            return
+        parts = []
+        if st.score is not None:
+            parts.append(f'SSIM {st.score:.3f}')
+        if st.color_error is not None:
+            parts.append(f'{st.color_error * 100:.1f}% pixels off-colour')
+        parts.append(f'{st.paths} paths, {st.colors} colours')
+        parts.append(f'SVG {report.format_bytes(st.svg_bytes)} vs raster '
+                     f'{report.format_bytes(st.raster_bytes)}')
+        verdict = 'passes the gate' if st.accepted else f'refused: {st.reason}'
+        self.stats_label.configure(text='  |  '.join(parts) + f'\n{verdict}')
+        self.keep_button.configure(state='normal')
+
+    # -- decisions ---------------------------------------------------------
+    def _svg_dest(self) -> str:
+        return output_path_for(self.result.source, self.app.input_path_var.get(),
+                               self.app.output_path_var.get(), fmt_module.SVG_SPEC)
+
+    def _keep(self) -> None:
+        dest = self._svg_dest()
+        self.preview.keep(dest)
+        w, h = self.preview.source.size
+        st = self.preview.stats_summary()
+        self.result.variants = [v for v in self.result.variants if v.format_key != 'svg']
+        self.result.variants.append(Variant(dest, w, h, st.svg_bytes, 'svg', 100, True,
+                                            st.score))
+        self.result.vector_note = f'SVG kept from preview: {st.reason}'
+        logger.info(f'{os.path.basename(self.result.source)}: SVG kept ({st.reason})')
+        self.app.after_preview_decision(self.result)
+        self.destroy()
+
+    def _discard(self) -> None:
+        dest = self._svg_dest()
+        removed = self.preview.discard(dest)
+        self.result.variants = [v for v in self.result.variants if v.format_key != 'svg']
+        self.result.vector_note = 'SVG discarded from preview'
+        logger.info(f'{os.path.basename(self.result.source)}: SVG discarded'
+                    + ('' if removed else ' (no file had been written)'))
+        self.app.after_preview_decision(self.result)
+        self.destroy()
 
 
 class ImageOptimizerApp(ctk.CTk):
@@ -404,9 +617,9 @@ class ImageOptimizerApp(ctk.CTk):
 
         head = ctk.CTkFrame(tab, fg_color='transparent')
         head.grid(row=0, column=0, sticky='ew', padx=6, pady=(6, 0))
-        for index, (text, width) in enumerate((('File', 320), ('Content', 130),
+        for index, (text, width) in enumerate((('File', 300), ('Content', 130),
                                                ('Encoded as', 130), ('Before', 90),
-                                               ('After', 90), ('Saved', 90))):
+                                               ('After', 90), ('Saved', 90), ('', 80))):
             ctk.CTkLabel(head, text=text, width=width, anchor='w',
                          font=ctk.CTkFont(size=12, weight='bold'),
                          text_color=('gray40', 'gray65')
@@ -832,7 +1045,7 @@ class ImageOptimizerApp(ctk.CTk):
             else:
                 saved_text = f'+{-pct:.1f}% bigger'
             cells = (
-                (name, 320, 'w', None),
+                (name, 300, 'w', None),
                 (result.stats.kind_label if result.stats else '', 130, 'w', None),
                 (encoded, 130, 'w', None),
                 (report.format_bytes(result.original_size), 90, 'e', None),
@@ -844,6 +1057,11 @@ class ImageOptimizerApp(ctk.CTk):
                 ctk.CTkLabel(frame, text=text, width=width, anchor=anchor,
                              font=ctk.CTkFont(size=12), **kwargs
                              ).grid(row=0, column=column, padx=4, sticky=anchor)
+            if self._previewable(result):
+                ctk.CTkButton(frame, text='Preview SVG', width=80, height=22,
+                              font=ctk.CTkFont(size=11),
+                              command=lambda r=result: self._open_preview(r)
+                              ).grid(row=0, column=len(cells), padx=4)
 
         running_before = sum(r.original_size for r in self.result_rows
                              if r.ok and not r.skipped)
@@ -854,6 +1072,33 @@ class ImageOptimizerApp(ctk.CTk):
             self.savings_label.configure(
                 text=f'{report.format_bytes(saved)} saved '
                      f'({saved / running_before * 100:.0f}%)')
+
+    def _previewable(self, result: FileResult) -> bool:
+        """Rows that traced, or that were eligible and refused, get a Preview button."""
+        if not result.ok or result.skipped or vector_module.availability_hint():
+            return False
+        if result.vector:
+            return True
+        return bool(result.stats and result.stats.kind in vector_module.VECTORIZABLE_KINDS
+                    and result.vector_note)
+
+    def _open_preview(self, result: FileResult) -> None:
+        try:
+            window = SvgPreviewWindow(self, result)
+            window.focus()
+        except Exception as exc:
+            logger.error(f'Could not open preview: {type(exc).__name__}: {exc}')
+            messagebox.showerror('Preview failed', str(exc), parent=self)
+
+    def after_preview_decision(self, result: FileResult) -> None:
+        """A Keep/Discard changed the outputs; refresh what depends on them."""
+        if self.summary and self.config_data.write_reports:
+            self._write_reports(self.summary)
+        # Redraw the results list so the 'Encoded as' column is current.
+        rows = list(self.result_rows)
+        self._clear_results()
+        for row in rows:
+            self._append_result_row(row)
 
     def _clear_results(self, message: str = '') -> None:
         for child in self.results_frame.winfo_children():
