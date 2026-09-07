@@ -23,6 +23,7 @@ to the originals.
 - [What the settings actually do](#what-the-settings-actually-do)
 - [Using the output on your site](#using-the-output-on-your-site)
 - [The reports](#the-reports)
+- [SVG for logos](#svg-for-logos-optional)
 - [AI alt text](#ai-alt-text-optional)
 - [Using the command line](#using-the-command-line)
 - [Using it from Python](#using-it-from-python)
@@ -102,6 +103,7 @@ WebP without it, just slightly larger files.
 |---|---|---|
 | `pillow-avif-plugin` | AVIF output, typically 20–30% smaller than WebP | AVIF is hidden, WebP is used |
 | `anthropic` | AI alt text | The AI tab says it is unavailable |
+| `vtracer` + `resvg-py` | SVG output for logos | The SVG option is greyed out with an install hint |
 | `customtkinter` | The desktop app | The CLI still works |
 
 To install it as a package and get an `image-optimizer` command on your PATH:
@@ -142,7 +144,9 @@ python image_optimizer_gui.py
 
 Most people change two things: **Responsive widths** (the sizes your layout
 actually uses) and **Site URL prefix** (the path images live under on your site,
-so the generated HTML points at the right place).
+so the generated HTML points at the right place). If your folder has logos in
+it, also tick **trace logos and flat graphics to SVG** — see
+[SVG for logos](#svg-for-logos-optional).
 
 ### 3. Press Start
 
@@ -293,6 +297,59 @@ scores, the full content analysis, and every variant written.
 
 ---
 
+## SVG for logos (optional)
+
+A logo is the one image on a site that gets shown at twenty different sizes
+— favicon, nav bar, footer, social card — and a raster is only ever sharp at
+one of them. So for **flat graphics only**, the tool can trace the image into
+an SVG that renders crisply at any size, and ship it alongside the raster.
+
+![Raster upscaled versus the traced SVG](docs/images/vector-comparison.png)
+
+Tick **Also trace logos and flat graphics to SVG** on the Output tab, or pass
+`--svg` on the CLI. Then, for every image the analyser classified as a flat
+graphic:
+
+1. **Clean it first.** The real colours are found by clustering (JPEG ringing
+   and antialiasing collapse into the colour they came from), every pixel is
+   snapped to that palette, and soft alpha edges are hardened. This is what
+   turns a noisy 96-path trace into a clean 4-path one.
+2. **Trace it** with [`vtracer`](https://github.com/visioncortex/vtracer) —
+   deterministic geometry, no model, no network.
+3. **Verify it.** The SVG is rendered back to pixels with `resvg` and compared
+   with the source two ways: SSIM for structure, and the share of pixels that
+   came out a clearly different colour — because SSIM runs on luma and barely
+   notices a small region being recoloured. Both must pass, and the path count
+   must be sane, or the SVG is **not written** and the log says why.
+
+Everything else — photos, screenshots, illustrations, gradients — is refused
+before any tracing happens. A tracer given a photo produces megabytes of
+noise; the classifier already knows not to ask.
+
+What you get:
+
+* `logo.svg` next to `logo.webp`. The raster is always still written and
+  remains the `<img>` fallback.
+* The `<picture>` markup puts the SVG source first, so every modern browser
+  takes it, and one file serves every width — no `srcset` needed.
+* The report's "Encoded as" column reads `webp lossless + svg`, and the log
+  line gives the path count, colour count and SSIM.
+
+Where it does not help, honestly:
+
+* **Degraded sources.** A logo scraped off a site as a 300px JPEG traces to a
+  visibly different shape and is refused with the score in the reason. If you
+  would rather have it anyway, lower the fidelity gate: `--svg-min-score 0.9`.
+* **Text becomes shapes**, not editable text. It is pixel-faithful, which is
+  what you want for a wordmark, but you cannot change the font later.
+* **Gradients** are flattened. The analyser calls those illustrations and
+  refuses them, which is the right answer.
+
+Needs `pip install vtracer resvg-py` — two self-contained wheels, no system
+libraries, nothing leaves your machine.
+
+---
+
 ## AI alt text (optional)
 
 Compression makes images lighter. It cannot make them *usable*. Missing alt text
@@ -391,6 +448,8 @@ The exit code is non-zero if any file failed, so it works as a CI gate.
 | `--widths 1600,800,400` | Also write these responsive widths |
 | `--keep-metadata` | Keep EXIF and colour profiles |
 | `--allow-larger` | Write output even if bigger than the source |
+| `--svg` | Also trace logos and flat graphics to SVG |
+| `--svg-min-score 0-1` | SSIM a trace must reach to be kept (default 0.95) |
 | `--skip-existing` | Incremental builds |
 | `--no-recursive` | Do not descend into subfolders |
 | `-j, --workers N` | Parallel workers |
@@ -502,6 +561,9 @@ by hand.
   cost of the file sizes above.
 * SEO filenames are *suggested*, not applied — renaming would break existing
   links.
+* SVG tracing is for flat artwork only; lettering becomes outlines, gradients
+  are not traced, and a badly degraded source is refused rather than traced
+  badly.
 * CMYK and 16-bit-per-channel sources are converted to 8-bit sRGB.
 
 **Supported input:** JPG/JPEG, PNG, WebP, AVIF, TIFF, BMP, GIF, PPM
@@ -516,10 +578,11 @@ pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-123 tests cover the perceptual metric, the content classifier, the encoder
+149 tests cover the perceptual metric, the content classifier, the encoder
 (EXIF orientation, alpha handling, the never-larger guarantee), batch execution
-and cancellation, the reports and markup, presets, the CLI, and the AI layer
-against a fake client.
+and cancellation, the reports and markup, presets, the CLI, the AI layer
+against a fake client, and the SVG tracer's gate (what is refused, what is
+kept, and that a kept SVG re-renders to match its source).
 
 ```
 image_optimizer/
@@ -529,6 +592,7 @@ image_optimizer/
     batch.py      discovery, parallelism, cancellation
     report.py     JSON/CSV/HTML reports and <picture> markup
     ai.py         optional Claude alt text
+    vectorize.py  optional SVG tracing for flat graphics, with a fidelity gate
     config.py     presets and persisted preferences
     cli.py        command line
 image_optimizer_gui.py    desktop app - a thin layer over the package

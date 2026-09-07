@@ -24,6 +24,7 @@ from image_optimizer import ai as ai_module
 from image_optimizer import config as config_module
 from image_optimizer import formats as fmt
 from image_optimizer import report
+from image_optimizer import vectorize as vector_module
 from image_optimizer.batch import (BatchProgress, BatchSummary, default_workers,
                                    discover, run_batch)
 from image_optimizer.engine import MODE_FIXED, MODE_LOSSLESS, MODE_SMART, FileResult
@@ -310,8 +311,24 @@ class ImageOptimizerApp(ctk.CTk):
             ctk.CTkCheckBox(toggles, variable=var, text=text).grid(
                 row=index, column=0, padx=4, pady=3, sticky='w')
 
+        svg_frame = ctk.CTkFrame(tab, fg_color='transparent')
+        svg_frame.grid(row=5, column=0, columnspan=3, padx=12, pady=(4, 2), sticky='ew')
+        self.vectorize_var = ctk.BooleanVar(value=self.settings.vectorize)
+        svg_hint = vector_module.availability_hint()
+        self.vectorize_check = ctk.CTkCheckBox(
+            svg_frame, variable=self.vectorize_var,
+            text='Also trace logos and flat graphics to SVG (kept only if the trace '
+                 'verifies against the source; the raster stays as fallback)')
+        self.vectorize_check.grid(row=0, column=0, padx=4, pady=3, sticky='w')
+        if svg_hint:
+            self.vectorize_var.set(False)
+            self.vectorize_check.configure(state='disabled')
+            ctk.CTkLabel(svg_frame, text=svg_hint, anchor='w', justify='left',
+                         text_color=('gray40', 'gray65'), font=ctk.CTkFont(size=12)
+                         ).grid(row=1, column=0, padx=32, pady=(0, 4), sticky='w')
+
         worker_frame = ctk.CTkFrame(tab, fg_color='transparent')
-        worker_frame.grid(row=5, column=0, columnspan=3, padx=16, pady=(6, 14),
+        worker_frame.grid(row=6, column=0, columnspan=3, padx=16, pady=(6, 14),
                           sticky='w')
         ctk.CTkLabel(worker_frame, text='Parallel workers').pack(side='left')
         self.workers_var = ctk.IntVar(value=self.config_data.workers or default_workers())
@@ -513,6 +530,8 @@ class ImageOptimizerApp(ctk.CTk):
         self.strip_var.set(s.strip_metadata)
         self.srgb_var.set(s.convert_to_srgb)
         self.never_larger_var.set(s.never_larger)
+        if not vector_module.availability_hint():
+            self.vectorize_var.set(s.vectorize)
         self._sync_widget_states()
 
     def _save_preset(self) -> None:
@@ -561,6 +580,7 @@ class ImageOptimizerApp(ctk.CTk):
         s.strip_metadata = bool(self.strip_var.get())
         s.convert_to_srgb = bool(self.srgb_var.get())
         s.never_larger = bool(self.never_larger_var.get())
+        s.vectorize = bool(self.vectorize_var.get()) and not vector_module.availability_hint()
         return s
 
     def _collect_ai_settings(self):
@@ -775,6 +795,8 @@ class ImageOptimizerApp(ctk.CTk):
             logger.info(f'    {result.decision}')
         if result.note:
             logger.info(f'    {result.note}')
+        if result.vector_note:
+            logger.info(f'    {result.vector_note}')
 
     def _append_result_row(self, result: FileResult) -> None:
         if self.results_placeholder is not None:
@@ -799,6 +821,8 @@ class ImageOptimizerApp(ctk.CTk):
             if primary:
                 encoded = (f'{primary.format_key} '
                            f'{"lossless" if primary.lossless else f"q{primary.quality}"}')
+            if result.vector:
+                encoded += ' + svg'
             pct = result.saved_ratio * 100
             color = ('#1a7f4b', '#4ec98a') if pct >= 0 else ('#b23c17', '#ef8b63')
             if result.skipped:
@@ -870,6 +894,9 @@ class ImageOptimizerApp(ctk.CTk):
                 parts.append(f'{len(summary.skipped)} up to date')
             if summary.failed:
                 parts.append(f'{len(summary.failed)} failed')
+            traced = sum(1 for r in summary.succeeded if r.vector)
+            if traced:
+                parts.append(f'{traced} also as SVG')
             parts.append(f'in {report.format_duration(summary.elapsed)}')
             self.status_label.configure(text=' | '.join(parts))
 

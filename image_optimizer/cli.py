@@ -58,6 +58,13 @@ def build_parser() -> argparse.ArgumentParser:
     enc.add_argument('--allow-larger', dest='never_larger', action='store_false',
                      default=None,
                      help='write output even when it is bigger than the source')
+    enc.add_argument('--svg', dest='vectorize', action='store_true', default=None,
+                     help='also trace logos and flat graphics to SVG (needs '
+                          'vtracer and resvg-py); kept only if it verifies '
+                          'against the source')
+    enc.add_argument('--svg-min-score', dest='vector_min_score', type=float,
+                     default=None, metavar='0-1',
+                     help='SSIM a trace must reach to be kept (default 0.95)')
 
     size = parser.add_argument_group('sizing')
     size.add_argument('--max-width', type=int)
@@ -100,7 +107,8 @@ def _apply_overrides(config: AppConfig, args: argparse.Namespace) -> OptimizeSet
     settings = config.settings
     simple = ('output_format', 'mode', 'target', 'quality', 'effort',
               'auto_settings', 'strip_metadata', 'never_larger', 'max_width',
-              'max_height', 'recursive', 'skip_existing')
+              'max_height', 'recursive', 'skip_existing', 'vectorize',
+              'vector_min_score')
     for name in simple:
         value = getattr(args, name, None)
         if value is not None:
@@ -139,6 +147,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         parser.error(f'unknown preset: {args.preset}')
     settings = _apply_overrides(config, args)
 
+    if settings.vectorize:
+        from .vectorize import availability_hint as svg_hint
+        hint = svg_hint()
+        if hint:
+            print(f'--svg: {hint}', file=sys.stderr)
+            return 2
+
     files = discover(args.input, settings.recursive)
     if not files:
         print(f'No supported images found in {args.input}', file=sys.stderr)
@@ -170,6 +185,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                           f'{"lossless" if primary.lossless else f"q{primary.quality}"}')
                 if primary.score is not None:
                     detail += f' ssim {primary.score:.4f}'
+            if result.vector:
+                detail += f' + svg {report.format_bytes(result.vector.size)}'
             print(f'  [{progress.done}/{progress.total}] {name}: '
                   f'{report.format_bytes(result.original_size)} -> '
                   f'{report.format_bytes(result.new_size)} '
@@ -202,6 +219,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if settings.widths:
             print(f'  {report.format_bytes(summary.variant_bytes)} written across '
                   f'all responsive variants')
+        if settings.vectorize:
+            traced = sum(1 for r in summary.succeeded if r.vector)
+            print(f'  {traced} image(s) also written as SVG')
         if summary.failed:
             print(f'  {len(summary.failed)} failed', file=sys.stderr)
 

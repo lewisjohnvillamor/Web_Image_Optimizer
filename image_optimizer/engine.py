@@ -44,6 +44,8 @@ class OptimizeSettings:
     recursive: bool = True
     keep_animation: bool = True
     jpeg_background: str = '#ffffff'     # flatten colour when dropping alpha
+    vectorize: bool = False              # also trace flat graphics to SVG
+    vector_min_score: float = 0.95       # SSIM the trace must reach to be kept
 
     def to_dict(self) -> Dict[str, object]:
         d = dict(self.__dict__)
@@ -94,10 +96,19 @@ class FileResult:
     variants: List[Variant] = field(default_factory=list)
     alt_text: Optional[str] = None
     seo_filename: Optional[str] = None
+    vector_note: Optional[str] = None  # why an SVG was or was not produced
 
     @property
     def primary(self) -> Optional[Variant]:
-        return self.variants[0] if self.variants else None
+        # The full-size raster. Never the SVG, which is an extra alongside it.
+        for variant in self.variants:
+            if variant.format_key != 'svg':
+                return variant
+        return None
+
+    @property
+    def vector(self) -> Optional[Variant]:
+        return next((v for v in self.variants if v.format_key == 'svg'), None)
 
     @property
     def new_size(self) -> int:
@@ -131,6 +142,7 @@ class FileResult:
             'variants': [v.to_dict() for v in self.variants],
             'alt_text': self.alt_text,
             'seo_filename': self.seo_filename,
+            'vector_note': self.vector_note,
         }
 
 
@@ -508,6 +520,10 @@ def optimize_file(source: str, input_root: str, output_root: str,
 
             result.variants = written
             result.ok = True
+
+            if settings.vectorize and written and not result.copied:
+                _write_vector(result, img, stats, source, input_root, output_root,
+                              settings)
     except UnidentifiedImageError:
         result.error = 'not a readable image (corrupt or unsupported)'
     except MemoryError:
@@ -517,6 +533,28 @@ def optimize_file(source: str, input_root: str, output_root: str,
 
     result.elapsed = time.time() - started
     return result
+
+
+def _write_vector(result: FileResult, img: Image.Image, stats: ImageStats,
+                  source: str, input_root: str, output_root: str,
+                  settings: OptimizeSettings) -> None:
+    """Trace to SVG alongside the raster, keeping it only if it verifies."""
+    from . import vectorize as vec   # optional deps live behind this import
+
+    primary = result.primary
+    outcome = vec.vectorize(img, stats, raster_size=primary.size if primary else 0,
+                            min_score=settings.vector_min_score)
+    if not outcome.accepted:
+        result.vector_note = f'no SVG: {outcome.reason}'
+        return
+
+    dest = output_path_for(source, input_root, output_root, fmt.SVG_SPEC)
+    os.makedirs(os.path.dirname(dest) or '.', exist_ok=True)
+    with open(dest, 'wb') as fh:
+        fh.write(outcome.svg)
+    result.variants.append(Variant(dest, img.size[0], img.size[1], outcome.size,
+                                   'svg', 100, True, outcome.score))
+    result.vector_note = f'SVG: {outcome.reason}'
 
 
 def _source_format_key(source: str) -> str:
