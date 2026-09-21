@@ -1,3 +1,5 @@
+![Web Image Optimizer - measures every image, then ships the smallest file that still looks right. 92% smaller: 2.0 MiB down to 160.8 KiB on the demo set.](docs/images/banner.png)
+
 # Web Image Optimizer
 
 **Author:** Lewis John Villamor
@@ -607,6 +609,10 @@ by hand.
 pip install -r requirements-dev.txt
 python -m pytest
 ```
+
+The README banner is generated from [`docs/banner.html`](docs/banner.html) —
+edit it, re-render at 1280×420 at 2× device scale, and optimise it with this
+tool. Its header comment has the exact commands.
 
 163 tests cover the perceptual metric, the content classifier, the encoder
 (EXIF orientation, alpha handling, the never-larger guarantee), batch execution
