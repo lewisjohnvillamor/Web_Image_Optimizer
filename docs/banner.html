@@ -1,106 +1,96 @@
 <!-- Source for docs/images/banner.png - the README banner.
-     Render at 1280x420, device scale 2, then quantise to 256 colours
-     and run it through this project:
+
+     Designed at 900x300 because that is the width a README column
+     actually renders at. An earlier version was laid out at 1280 and
+     scaled down in the browser, which left the small type at ~9px and
+     unreadable. Every size in here is the size a reader sees.
+
+     To regenerate: render this file at 900x300 with device scale 2,
+     quantise to 256 colours with dithering, then run it through this
+     project:
        python -m image_optimizer <dir> <out> --format png --mode lossless --effort 6
-     Truecolour PNG is 265 KiB; the palette version below is 109 KiB and
-     visually identical (the only gradient is the recessive glow). -->
+     Truecolour PNG is 171 KiB; the palette version is 70 KiB at
+     SSIM 0.9999 (the only gradient is the recessive glow). -->
 <!doctype html><html><head><meta charset="utf-8"><style>
-/* Palette roles: dark surface + dark-mode steps from the reference palette.
-   A self-contained dark banner reads correctly on both GitHub themes. */
+/* Designed at 900px - the width a README actually renders at - and shot at
+   2x. Every size below is therefore the size a reader sees, not a size that
+   gets scaled down into mush. */
 :root{
-  --surface-1:#1a1a19;
-  --surface-2:#232322;
+  --surface-1:#17171a;
+  --surface-2:#212126;
   --text-primary:#ffffff;
-  --text-secondary:#c3c2b7;
-  --text-muted:#8a8a80;
-  --series-1:#3987e5;      /* the "after" - the point of the chart */
-  --context:#4d4d46;       /* the "before" - context, deliberately recessive */
-  --hairline:#2e2e2c;
+  --text-secondary:#d2d1c8;   /* lifted: this is read at 19px, not 30px */
+  --text-muted:#9d9d94;
+  --series-1:#4a90ec;         /* the "after" - the point */
+  --context:#5b5b54;          /* the "before" - recessive, but visible */
+  --hairline:#33333a;
 }
 *{margin:0;padding:0;box-sizing:border-box}
-body{width:1280px;height:420px;background:var(--surface-1);
+body{width:900px;height:300px;background:var(--surface-1);
   font-family:'Roboto','DejaVu Sans',sans-serif;
   -webkit-font-smoothing:antialiased;overflow:hidden;position:relative}
-/* one recessive glow, anchored behind the stat panel */
-.glow{position:absolute;right:-120px;top:-160px;width:760px;height:760px;border-radius:50%;
-  background:radial-gradient(circle,rgba(57,135,229,.22) 0%,rgba(57,135,229,.07) 42%,transparent 68%)}
-.wrap{position:relative;height:100%;display:grid;grid-template-columns:1fr 470px;grid-template-rows:1fr;
-  gap:52px;padding:48px 60px}
+.glow{position:absolute;right:-90px;top:-130px;width:560px;height:560px;border-radius:50%;
+  background:radial-gradient(circle,rgba(74,144,236,.26) 0%,rgba(74,144,236,.08) 44%,transparent 70%)}
+.wrap{position:relative;height:100%;display:grid;grid-template-columns:1fr 330px;
+  grid-template-rows:1fr;gap:34px;padding:34px 36px}
 
 /* ---------- left: identity ---------- */
 .left{display:flex;flex-direction:column;justify-content:center}
-.brand{display:flex;align-items:center;gap:18px;margin-bottom:22px}
-.mark{flex:none}
-h1{font-size:50px;font-weight:700;letter-spacing:-1.4px;color:var(--text-primary);line-height:1}
-.tagline{font-size:21px;line-height:1.45;color:var(--text-secondary);font-weight:400;
-  max-width:19em;margin-bottom:30px}
+.brand{display:flex;align-items:center;gap:14px;margin-bottom:18px}
+h1{font-size:39px;font-weight:700;letter-spacing:-1px;color:var(--text-primary);line-height:1.05}
+.tagline{font-size:19px;line-height:1.5;color:var(--text-secondary);font-weight:400}
 .tagline b{color:var(--text-primary);font-weight:500}
-.chips{display:flex;flex-wrap:wrap;gap:9px;max-width:25em}
-.chip{font-size:13.5px;font-weight:500;color:var(--text-secondary);
-  border:1px solid var(--hairline);background:var(--surface-2);
-  padding:6px 13px;border-radius:999px;white-space:nowrap}
 
-/* ---------- right: the one number, and the magnitude behind it ---------- */
-.panel{background:var(--surface-2);border:1px solid var(--hairline);border-radius:16px;
-  padding:26px 30px;display:flex;flex-direction:column;justify-content:center}
-.hero{display:flex;align-items:baseline;gap:12px;margin-bottom:22px}
-.hero .num{font-size:76px;font-weight:700;letter-spacing:-3px;color:var(--text-primary);line-height:.9}
-.hero .unit{font-size:23px;font-weight:500;color:var(--text-secondary)}
-.row{margin-bottom:14px}
+/* ---------- right: the one number ---------- */
+.panel{background:var(--surface-2);border:1px solid var(--hairline);border-radius:14px;
+  padding:16px 22px;display:flex;flex-direction:column;justify-content:center}
+.hero{display:flex;align-items:baseline;gap:9px;margin-bottom:14px}
+.hero .num{font-size:56px;font-weight:700;letter-spacing:-2px;color:var(--text-primary);line-height:.9}
+.hero .unit{font-size:18px;font-weight:500;color:var(--text-secondary)}
+.row{margin-bottom:12px}
 .row:last-of-type{margin-bottom:0}
-.rowhead{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}
-.rowhead .k{font-size:13.5px;font-weight:500;color:var(--text-muted);
-  text-transform:uppercase;letter-spacing:.09em}
+.rowhead{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}
+.rowhead .k{font-size:13px;font-weight:600;color:var(--text-muted);
+  text-transform:uppercase;letter-spacing:.08em}
 .rowhead .v{font-size:16px;font-weight:600;color:var(--text-primary);
   font-variant-numeric:tabular-nums}
-/* bar: 20px thick, square at the baseline, 4px rounded data-end */
-.track{height:20px;width:100%}
-.bar{height:20px;border-radius:0 4px 4px 0;display:block}
+/* 18px mark, square at the baseline, 4px rounded data-end */
+.bar{height:18px;border-radius:0 4px 4px 0;display:block}
 .bar.context{background:var(--context)}
 .bar.after{background:var(--series-1)}
-.caption{margin-top:18px;padding-top:14px;border-top:1px solid var(--hairline);
-  font-size:13px;color:var(--text-muted);line-height:1.5}
+.caption{margin-top:14px;padding-top:12px;border-top:1px solid var(--hairline);
+  font-size:13px;color:var(--text-muted);line-height:1.4}
 </style></head><body>
 <div class="glow"></div>
 <div class="wrap">
   <div class="left">
     <div class="brand">
-      <svg class="mark" width="56" height="56" viewBox="0 0 56 56" fill="none">
-        <rect x="2" y="4.5" width="52" height="42" rx="9" stroke="#3987e5" stroke-width="3.2"/>
-        <circle cx="17.5" cy="18.5" r="4.2" fill="#ffffff"/>
-        <path d="M7.5 39 L20 26.5 L28.5 35 L36 28.5 L48.5 41"
-              stroke="#ffffff" stroke-width="3.2" stroke-linecap="round"
-              stroke-linejoin="round"/>
-        <circle cx="43" cy="42" r="11.5" fill="#1a1a19"/>
-        <circle cx="43" cy="42" r="8.6" fill="#3987e5"/>
-        <path d="M43 37.8 L43 46 M39.4 42.6 L43 46.2 L46.6 42.6"
-              stroke="#ffffff" stroke-width="2.3" stroke-linecap="round"
-              stroke-linejoin="round"/>
+      <svg width="46" height="46" viewBox="0 0 56 56" fill="none">
+        <rect x="2" y="4.5" width="52" height="42" rx="9" stroke="#4a90ec" stroke-width="3.4"/>
+        <circle cx="17.5" cy="18.5" r="4.4" fill="#ffffff"/>
+        <path d="M7.5 39 L20 26.5 L28.5 35 L36 28.5 L48.5 41" stroke="#ffffff"
+              stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="43" cy="42" r="11.8" fill="#17171a"/>
+        <circle cx="43" cy="42" r="8.8" fill="#4a90ec"/>
+        <path d="M43 37.6 L43 46.2 M39.2 42.6 L43 46.4 L46.8 42.6" stroke="#ffffff"
+              stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
       <h1>Web&nbsp;Image&nbsp;Optimizer</h1>
     </div>
-    <p class="tagline">Measures every image, then ships the
+    <p class="tagline">Measures every image, then ships the<br>
       <b>smallest file that still looks right</b>.</p>
-    <div class="chips">
-      <span class="chip">Per-image quality search</span>
-      <span class="chip">AVIF + WebP</span>
-      <span class="chip">SVG for logos</span>
-      <span class="chip">Responsive &lt;picture&gt;</span>
-      <span class="chip">WCAG alt text</span>
-    </div>
   </div>
 
   <div class="panel">
     <div class="hero"><span class="num">92%</span><span class="unit">smaller</span></div>
     <div class="row">
       <div class="rowhead"><span class="k">Before</span><span class="v">2.0 MiB</span></div>
-      <div class="track"><span class="bar context" style="width:100%"></span></div>
+      <span class="bar context" style="width:100%"></span>
     </div>
     <div class="row">
       <div class="rowhead"><span class="k">After</span><span class="v">160.8 KiB</span></div>
-      <div class="track"><span class="bar after" style="width:7.9%"></span></div>
+      <span class="bar after" style="width:7.9%"></span>
     </div>
-    <p class="caption">Five-image demo set, to scale.<br>
-      Logo and screenshot came out pixel-identical.</p>
+    <p class="caption">Five-image demo set, drawn to scale.</p>
   </div>
 </div></body></html>
