@@ -610,9 +610,11 @@ pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-The README banner is generated from [`docs/banner.html`](docs/banner.html) —
-edit it, re-render at 1280×420 at 2× device scale, and optimise it with this
-tool. Its header comment has the exact commands.
+The images are generated, not drawn: the README banner from
+[`docs/banner.html`](docs/banner.html) (3:1, sized for a README column) and the
+project-card cover from [`docs/cover.html`](docs/cover.html) (2:1, laid out
+centred so a card that centre-crops it still shows every word). Each file's
+header comment has the render and optimise commands.
 
 163 tests cover the perceptual metric, the content classifier, the encoder
 (EXIF orientation, alpha handling, the never-larger guarantee), batch execution

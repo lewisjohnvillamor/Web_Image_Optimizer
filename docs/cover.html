@@ -1,0 +1,87 @@
+<!-- Source for docs/images/cover.png - the project-card / cover image.
+
+     Separate from docs/banner.html on purpose. Cover slots CENTRE-CROP:
+     the 3:1 README banner put into a 2:1 card lost 16% off each side,
+     which cut the wordmark. So this one is 2:1 and laid out as a
+     centred column no wider than 780px - the central 65% - which keeps
+     every word through centre-crops from about 2.6:1 down to 1.5:1.
+
+     Render at 1200x600, device scale 2, quantise to 256 colours with
+     dithering, then:
+       python -m image_optimizer <dir> <out> --format png --mode lossless --effort 6 -->
+<!doctype html><html><head><meta charset="utf-8"><style>
+/* Cover / card image. 1200x600 (2:1) to match the slot, but laid out as a
+   CENTRED column no wider than 780px - the central 65% - so a cover that
+   centre-crops to anything from ~2.6:1 down to ~1.5:1 still shows every
+   word. A two-column layout puts content at the edges, which is precisely
+   what a crop removes. */
+:root{
+  --surface-1:#17171a;
+  --surface-2:#212126;
+  --text-primary:#ffffff;
+  --text-secondary:#d2d1c8;
+  --text-muted:#9d9d94;
+  --series-1:#4a90ec;
+  --context:#5b5b54;
+  --hairline:#33333a;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{width:1200px;height:600px;background:var(--surface-1);
+  font-family:'Roboto','DejaVu Sans',sans-serif;
+  -webkit-font-smoothing:antialiased;overflow:hidden;position:relative;
+  display:flex;align-items:center;justify-content:center}
+.glow{position:absolute;left:50%;top:-230px;transform:translateX(-50%);
+  width:1000px;height:820px;border-radius:50%;
+  background:radial-gradient(ellipse,rgba(74,144,236,.24) 0%,rgba(74,144,236,.07) 46%,transparent 70%)}
+.col{position:relative;width:780px;display:flex;flex-direction:column;align-items:center;
+  text-align:center}
+.brand{display:flex;align-items:center;gap:18px;margin-bottom:22px}
+h1{font-size:58px;font-weight:700;letter-spacing:-1.5px;color:var(--text-primary);line-height:1}
+.tagline{font-size:22px;line-height:1.45;color:var(--text-secondary);margin-bottom:32px}
+.tagline b{color:var(--text-primary);font-weight:500}
+
+.stat{background:var(--surface-2);border:1px solid var(--hairline);border-radius:16px;
+  padding:20px 26px;width:560px}
+.hero{display:flex;align-items:baseline;justify-content:center;gap:10px;margin-bottom:16px}
+.hero .num{font-size:66px;font-weight:700;letter-spacing:-2px;color:var(--text-primary);line-height:.9}
+.hero .unit{font-size:20px;font-weight:500;color:var(--text-secondary)}
+.row{margin-bottom:12px}
+.row:last-of-type{margin-bottom:0}
+.rowhead{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px}
+.rowhead .k{font-size:13px;font-weight:600;color:var(--text-muted);
+  text-transform:uppercase;letter-spacing:.08em}
+.rowhead .v{font-size:17px;font-weight:600;color:var(--text-primary);
+  font-variant-numeric:tabular-nums}
+.bar{height:18px;border-radius:0 4px 4px 0;display:block}
+.bar.context{background:var(--context)}
+.bar.after{background:var(--series-1)}
+</style></head><body>
+<div class="glow"></div>
+<div class="col">
+  <div class="brand">
+    <svg width="66" height="66" viewBox="0 0 56 56" fill="none">
+      <rect x="2" y="4.5" width="52" height="42" rx="9" stroke="#4a90ec" stroke-width="3.4"/>
+      <circle cx="17.5" cy="18.5" r="4.4" fill="#ffffff"/>
+      <path d="M7.5 39 L20 26.5 L28.5 35 L36 28.5 L48.5 41" stroke="#ffffff"
+            stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="43" cy="42" r="11.8" fill="#17171a"/>
+      <circle cx="43" cy="42" r="8.8" fill="#4a90ec"/>
+      <path d="M43 37.6 L43 46.2 M39.2 42.6 L43 46.4 L46.8 42.6" stroke="#ffffff"
+            stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <h1>Web&nbsp;Image&nbsp;Optimizer</h1>
+  </div>
+  <p class="tagline">Measures every image, then ships the
+    <b>smallest file that still looks right</b>.</p>
+  <div class="stat">
+    <div class="hero"><span class="num">92%</span><span class="unit">smaller</span></div>
+    <div class="row">
+      <div class="rowhead"><span class="k">Before</span><span class="v">2.0 MiB</span></div>
+      <span class="bar context" style="width:100%"></span>
+    </div>
+    <div class="row">
+      <div class="rowhead"><span class="k">After</span><span class="v">160.8 KiB</span></div>
+      <span class="bar after" style="width:7.9%"></span>
+    </div>
+  </div>
+</div></body></html>
