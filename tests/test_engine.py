@@ -250,3 +250,58 @@ def test_prepare_image_converts_a_non_srgb_profile_to_srgb(tmp_path, photo):
     tagged.info['icc_profile'] = icc
     _, out_icc = prepare_image(tagged, OptimizeSettings(convert_to_srgb=True))
     assert out_icc is None
+
+
+def test_dry_run_measures_without_writing(tmp_path, photo):
+    """Every encode and measurement happens; nothing reaches the disk."""
+    src = tmp_path / 'src'
+    src.mkdir()
+    photo.save(src / 'p.png')
+    out = tmp_path / 'out'
+    result = optimize_file(str(src / 'p.png'), str(src), str(out),
+                           OptimizeSettings(output_format='webp', dry_run=True))
+    assert result.ok and not result.error
+    assert result.new_size > 0 and result.new_size < result.original_size
+    assert result.primary.score is not None
+    assert not out.exists()
+    assert not os.path.exists(result.primary.path)
+
+
+def test_dry_run_matches_a_real_run(tmp_path, photo):
+    src = tmp_path / 'src'
+    src.mkdir()
+    photo.save(src / 'p.png')
+    dry = optimize_file(str(src / 'p.png'), str(src), str(tmp_path / 'a'),
+                        OptimizeSettings(output_format='webp', dry_run=True))
+    wet = optimize_file(str(src / 'p.png'), str(src), str(tmp_path / 'b'),
+                        OptimizeSettings(output_format='webp'))
+    assert dry.new_size == wet.new_size
+    assert dry.primary.quality == wet.primary.quality
+    assert dry.primary.score == wet.primary.score
+
+
+def test_dry_run_does_not_copy_an_original_through(tmp_path):
+    """The never-larger path copies the source; a dry run must not."""
+    src = tmp_path / 'src'
+    src.mkdir()
+    Image.new('RGB', (4, 4), 'white').save(src / 'tiny.png', optimize=True)
+    out = tmp_path / 'out'
+    result = optimize_file(str(src / 'tiny.png'), str(src), str(out),
+                           OptimizeSettings(output_format='avif', mode=MODE_FIXED,
+                                            quality=100, auto_settings=False,
+                                            dry_run=True))
+    assert result.ok
+    assert not out.exists()
+
+
+def test_dry_run_respects_responsive_widths(tmp_path, photo):
+    src = tmp_path / 'src'
+    src.mkdir()
+    photo.save(src / 'hero.png')
+    out = tmp_path / 'out'
+    result = optimize_file(str(src / 'hero.png'), str(src), str(out),
+                           OptimizeSettings(output_format='webp', widths=(320, 160),
+                                            dry_run=True))
+    assert len(result.variants) == 3
+    assert all(v.size > 0 for v in result.variants)
+    assert not out.exists()

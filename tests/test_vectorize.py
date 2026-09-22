@@ -278,3 +278,16 @@ def test_white_lettering_stays_white(tmp_path):
     assert rendered.getpixel((300, 295))[:3] == (255, 255, 255)
     assert rendered.getpixel((140, 140))[:3] == (255, 209, 64)
     assert V.color_error(img, rendered) < 0.01
+
+
+@needs_tracer
+def test_dry_run_traces_but_writes_no_svg(tmp_path, flat_graphic):
+    src = tmp_path / 'src'; src.mkdir()
+    flat_graphic.save(src / 'logo.png')
+    out = tmp_path / 'out'
+    result = optimize_file(str(src / 'logo.png'), str(src), str(out),
+                           OptimizeSettings(output_format='webp', vectorize=True,
+                                            dry_run=True))
+    assert result.vector is not None and result.vector.size > 0
+    assert result.vector_note.startswith('SVG:')
+    assert not out.exists()

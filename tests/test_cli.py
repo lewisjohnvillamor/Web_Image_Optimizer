@@ -27,11 +27,60 @@ def test_a_nonexistent_input_folder_is_rejected(tmp_path):
         main([str(tmp_path / 'nope'), str(tmp_path / 'out')])
 
 
-def test_dry_run_writes_nothing(sample_tree, tmp_path, capsys):
+def test_list_only_names_the_files_and_stops(sample_tree, tmp_path, capsys):
     out = tmp_path / 'out'
-    assert main([str(sample_tree), str(out), '--dry-run']) == 0
-    assert '4 image(s) would be processed' in capsys.readouterr().out
+    assert main([str(sample_tree), str(out), '--list']) == 0
+    printed = capsys.readouterr().out
+    assert '4 image(s) would be processed' in printed
+    assert 'photo.jpg' in printed
     assert not out.exists()
+
+
+def test_dry_run_measures_the_saving_and_writes_nothing(sample_tree, tmp_path, capsys):
+    out = tmp_path / 'out'
+    assert main([str(sample_tree), str(out), '-f', 'webp', '--dry-run']) == 0
+    printed = capsys.readouterr().out
+    assert 'Measuring' in printed and 'Measured' in printed
+    assert 'smaller' in printed                      # a real saving figure
+    assert 'nothing was written' in printed
+    assert not out.exists()
+
+
+def test_dry_run_reports_the_same_numbers_as_a_real_run(sample_tree, tmp_path):
+    import json
+    dry, wet = tmp_path / 'dry.json', tmp_path / 'wet.json'
+    main([str(sample_tree), str(tmp_path / 'o1'), '-f', 'webp', '--dry-run',
+          '--json', str(dry), '--quiet'])
+    main([str(sample_tree), str(tmp_path / 'o2'), '-f', 'webp',
+          '--json', str(wet), '--quiet'])
+    a, b = json.loads(dry.read_text()), json.loads(wet.read_text())
+    assert a['totals']['new_bytes'] == b['totals']['new_bytes']
+    assert a['totals']['saved_ratio'] == b['totals']['saved_ratio']
+    assert not (tmp_path / 'o1').exists()
+    assert (tmp_path / 'o2').exists()
+
+
+def test_dry_run_still_writes_the_report_you_asked_for(sample_tree, tmp_path):
+    report_path = tmp_path / 'audit.html'
+    main([str(sample_tree), str(tmp_path / 'out'), '-f', 'webp', '--dry-run',
+          '--html', str(report_path), '--quiet'])
+    assert report_path.exists() and 'optimisation report' in report_path.read_text()
+    assert not (tmp_path / 'out').exists()
+
+
+def test_dry_run_does_not_send_images_to_the_api(sample_tree, tmp_path, capsys):
+    assert main([str(sample_tree), str(tmp_path / 'out'), '-f', 'webp',
+                 '--dry-run', '--alt-text', '--quiet']) == 0
+    assert 'does not send images to the API' in capsys.readouterr().err
+
+
+def test_dry_run_does_not_write_markup_pointing_at_missing_files(sample_tree, tmp_path,
+                                                                 capsys):
+    out = tmp_path / 'out'
+    main([str(sample_tree), str(out), '-f', 'webp', '--dry-run', '--markup',
+          '--quiet'])
+    assert 'Markup skipped' in capsys.readouterr().err
+    assert not (out / 'snippets.html').exists()
 
 
 def test_a_full_run_optimises_and_reports(sample_tree, tmp_path, capsys):

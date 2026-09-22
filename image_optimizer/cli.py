@@ -78,7 +78,10 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument('--skip-existing', action='store_true', default=None,
                      help='leave up-to-date outputs alone (incremental builds)')
     run.add_argument('--dry-run', action='store_true',
-                     help='list what would be processed and exit')
+                     help='measure what the run would save and report it '
+                          'without writing anything')
+    run.add_argument('--list', dest='list_only', action='store_true',
+                     help='just list the files that would be processed, and exit')
     run.add_argument('-v', '--verbose', action='store_true')
     run.add_argument('--quiet', action='store_true')
 
@@ -159,15 +162,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f'No supported images found in {args.input}', file=sys.stderr)
         return 1
 
-    if args.dry_run:
+    if args.list_only:
         print(f'{len(files)} image(s) would be processed:')
         for path in files:
             print('  ' + os.path.relpath(path, args.input))
         return 0
 
+    settings.dry_run = args.dry_run
+
     workers = args.workers or default_workers()
     if not args.quiet:
-        print(f'Optimising {len(files)} image(s) with {workers} worker(s)...')
+        verb = 'Measuring' if settings.dry_run else 'Optimising'
+        print(f'{verb} {len(files)} image(s) with {workers} worker(s)...')
 
     def on_progress(progress):
         if args.quiet:
@@ -203,25 +209,33 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print('\nCancelled.', file=sys.stderr)
         return 130
 
-    if args.alt_text:
+    if args.alt_text and not settings.dry_run:
         _run_alt_text(summary, args)
+    elif args.alt_text:
+        print('Alt text skipped: a dry run does not send images to the API.',
+              file=sys.stderr)
 
     if not args.quiet:
         print('\r' + ' ' * 60, end='\r')
         skipped = len(summary.skipped)
         skipped_note = f' ({skipped} already up to date)' if skipped else ''
-        print(f'Optimised {len(summary.succeeded)} image(s){skipped_note} in '
+        verb = 'Measured' if settings.dry_run else 'Optimised'
+        print(f'{verb} {len(summary.succeeded)} image(s){skipped_note} in '
               f'{report.format_duration(summary.elapsed)}')
         print(f'  {report.format_bytes(summary.original_bytes)} -> '
               f'{report.format_bytes(summary.new_bytes)} '
               f'({summary.saved_ratio * 100:.1f}% smaller, '
               f'{report.format_bytes(summary.saved_bytes)} saved)')
         if settings.widths:
-            print(f'  {report.format_bytes(summary.variant_bytes)} written across '
+            verb = 'across' if settings.dry_run else 'written across'
+            print(f'  {report.format_bytes(summary.variant_bytes)} {verb} '
                   f'all responsive variants')
         if settings.vectorize:
             traced = sum(1 for r in summary.succeeded if r.vector)
-            print(f'  {traced} image(s) also written as SVG')
+            noun = 'traceable to SVG' if settings.dry_run else 'also written as SVG'
+            print(f'  {traced} image(s) {noun}')
+        if settings.dry_run:
+            print('  (dry run - nothing was written)')
         if summary.failed:
             print(f'  {len(summary.failed)} failed', file=sys.stderr)
 
@@ -229,7 +243,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                          (args.html, report.write_html_report)):
         if path:
             print(f'Wrote {writer(summary, path)}')
-    if args.markup is not None:
+    if args.markup is not None and settings.dry_run:
+        print('Markup skipped: a dry run writes no images for it to reference.',
+              file=sys.stderr)
+    elif args.markup is not None:
         path = args.markup or os.path.join(args.output, 'snippets.html')
         print(f'Wrote {report.write_markup(summary, path, args.base_url, args.sizes)}')
 

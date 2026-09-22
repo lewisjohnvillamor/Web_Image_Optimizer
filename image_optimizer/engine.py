@@ -46,6 +46,7 @@ class OptimizeSettings:
     jpeg_background: str = '#ffffff'     # flatten colour when dropping alpha
     vectorize: bool = False              # also trace flat graphics to SVG
     vector_min_score: float = 0.95       # SSIM the trace must reach to be kept
+    dry_run: bool = False                # measure everything, write nothing
 
     def to_dict(self) -> Dict[str, object]:
         d = dict(self.__dict__)
@@ -444,7 +445,13 @@ def existing_is_current(source: str, input_root: str, output_root: str,
 
 def optimize_file(source: str, input_root: str, output_root: str,
                   settings: OptimizeSettings) -> FileResult:
-    """Optimise one file and write every requested variant to disk."""
+    """Optimise one file and write every requested variant to disk.
+
+    With ``settings.dry_run`` every encode, measurement and decision still
+    happens - the result carries the real sizes and scores - but nothing is
+    written and no directory is created. That is what makes "what would this
+    save me?" answerable without touching the disk.
+    """
     started = time.time()
     result = FileResult(source=source)
     try:
@@ -496,12 +503,13 @@ def optimize_file(source: str, input_root: str, output_root: str,
                 if (settings.never_larger and not suffix
                         and len(payload) >= result.original_size
                         and not settings.widths):
-                    os.makedirs(os.path.dirname(dest) or '.', exist_ok=True)
                     fallback = os.path.join(
                         os.path.dirname(dest),
                         os.path.basename(os.path.splitext(source)[0]) +
                         os.path.splitext(source)[1])
-                    shutil.copy2(source, fallback)
+                    if not settings.dry_run:
+                        os.makedirs(os.path.dirname(dest) or '.', exist_ok=True)
+                        shutil.copy2(source, fallback)
                     result.copied = True
                     result.ok = True
                     result.note = ('already smaller than anything we could encode - '
@@ -511,9 +519,10 @@ def optimize_file(source: str, input_root: str, output_root: str,
                                            _source_format_key(source), 0, False, None))
                     break
 
-                os.makedirs(os.path.dirname(dest) or '.', exist_ok=True)
-                with open(dest, 'wb') as fh:
-                    fh.write(payload)
+                if not settings.dry_run:
+                    os.makedirs(os.path.dirname(dest) or '.', exist_ok=True)
+                    with open(dest, 'wb') as fh:
+                        fh.write(payload)
                 written.append(Variant(dest, variant_img.size[0], variant_img.size[1],
                                        len(payload), spec.key, quality, lossless,
                                        round(score, 4) if score is not None else None))
@@ -549,9 +558,10 @@ def _write_vector(result: FileResult, img: Image.Image, stats: ImageStats,
         return
 
     dest = output_path_for(source, input_root, output_root, fmt.SVG_SPEC)
-    os.makedirs(os.path.dirname(dest) or '.', exist_ok=True)
-    with open(dest, 'wb') as fh:
-        fh.write(outcome.svg)
+    if not settings.dry_run:
+        os.makedirs(os.path.dirname(dest) or '.', exist_ok=True)
+        with open(dest, 'wb') as fh:
+            fh.write(outcome.svg)
     result.variants.append(Variant(dest, img.size[0], img.size[1], outcome.size,
                                    'svg', 100, True, outcome.score))
     result.vector_note = f'SVG: {outcome.reason}'
