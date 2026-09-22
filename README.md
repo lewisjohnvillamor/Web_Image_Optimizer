@@ -445,9 +445,28 @@ python -m image_optimizer ./images ./dist \
 # Incremental rebuild - unchanged files are skipped without re-encoding
 python -m image_optimizer ./images ./dist --skip-existing
 
-# See what would happen, change nothing
+# What would this save me? Measures everything, writes nothing
 python -m image_optimizer ./images ./dist --dry-run
 ```
+
+`--dry-run` is a full run with the writes turned off: every image is analysed,
+encoded and scored exactly as it would be, so the numbers are real rather than
+estimated — you just get them without anything touching the disk.
+
+```
+Measuring 5 image(s) with 4 worker(s)...
+  [1/5] banner.png: 931.8 KiB -> 28.4 KiB (-97.0%) avif q54 ssim 0.9951
+  [2/5] landscape.jpg: 699.4 KiB -> 74.6 KiB (-89.3%) avif q52 ssim 0.9923
+  ...
+Measured 5 image(s) in 11.4s
+  2.0 MiB -> 160.8 KiB (92.1% smaller, 1.8 MiB saved)
+  (dry run - nothing was written)
+```
+
+Point it at the images a site already ships to find out what is on the table
+before committing to anything. `--json`, `--csv` and `--html` work with it, so
+the audit can be a file you keep or a CI artifact. Use `--list` if you only
+want the filenames.
 
 Typical output with `--verbose`:
 
@@ -490,7 +509,9 @@ The exit code is non-zero if any file failed, so it works as a CI gate.
 | `--base-url`, `--sizes` | Fill in the markup correctly |
 | `--alt-text` | Generate alt text with Claude |
 | `--ai-model`, `--ai-context`, `--ai-concurrency` | Tune that |
-| `--dry-run`, `-v`, `--quiet` | Run control |
+| `--dry-run` | Measure the saving, write nothing |
+| `--list` | Print the filenames that would be processed, and stop |
+| `-v`, `--quiet` | Run control |
 | `--list-presets`, `--list-formats` | Inspect and exit |
 
 </details>
