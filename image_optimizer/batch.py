@@ -6,12 +6,13 @@ across processes.
 """
 from __future__ import annotations
 
+import fnmatch
 import os
 import threading
 import time
 from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Callable, Dict, Iterable, List, Optional, Sequence
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .engine import FileResult, OptimizeSettings, optimize_file
 from .formats import INPUT_EXTENSIONS
@@ -81,28 +82,86 @@ class BatchSummary:
         return sum(v.size for r in self.succeeded for v in r.variants)
 
 
+def relative_key(path: str, input_root: str) -> str:
+    """Path relative to the root, with forward slashes - what patterns match."""
+    return os.path.relpath(path, input_root).replace(os.sep, '/')
+
+
+def is_excluded(relative: str, patterns: Sequence[str]) -> bool:
+    """Whether a relative path matches any exclude pattern.
+
+    Patterns are globs matched case-insensitively against the path relative
+    to the input root, using forward slashes: ``icons/*``, ``*.gif``,
+    ``**/sprites/*``. ``*`` crosses directory separators, so ``*.gif``
+    matches at any depth without needing a prefix.
+    """
+    if not patterns:
+        return False
+    lowered = relative.lower()
+    base = lowered.rsplit('/', 1)[-1]
+    for pattern in patterns:
+        pattern = pattern.strip().replace(os.sep, '/').lower()
+        if not pattern:
+            continue
+        if fnmatch.fnmatch(lowered, pattern) or fnmatch.fnmatch(base, pattern):
+            return True
+        # A bare directory name excludes everything under it.
+        if fnmatch.fnmatch(lowered, pattern.rstrip('/') + '/*'):
+            return True
+    return False
+
+
 def discover(input_root: str, recursive: bool = True,
-             extensions: Sequence[str] = INPUT_EXTENSIONS) -> List[str]:
+             extensions: Sequence[str] = INPUT_EXTENSIONS,
+             exclude: Sequence[str] = ()) -> List[str]:
     """Find candidate images under a folder, sorted for stable ordering."""
     exts = tuple(e.lower() for e in extensions)
     found: List[str] = []
     if not os.path.isdir(input_root):
         return found
+
+    def keep(path: str) -> bool:
+        return not is_excluded(relative_key(path, input_root), exclude)
+
     if recursive:
         for root, dirs, files in os.walk(input_root):
-            dirs[:] = sorted(d for d in dirs if not d.startswith('.'))
+            # Prune excluded directories rather than walking into them, so
+            # "--exclude node_modules" is fast as well as correct.
+            dirs[:] = sorted(d for d in dirs if not d.startswith('.')
+                             and keep(os.path.join(root, d)))
             for name in sorted(files):
-                if name.lower().endswith(exts):
-                    found.append(os.path.join(root, name))
+                path = os.path.join(root, name)
+                if name.lower().endswith(exts) and keep(path):
+                    found.append(path)
         # os.walk emits a folder's own files before descending, so the raw
         # order is not sorted overall. Sort the whole list for stable runs.
         found.sort()
     else:
         for name in sorted(os.listdir(input_root)):
             path = os.path.join(input_root, name)
-            if os.path.isfile(path) and name.lower().endswith(exts):
+            if os.path.isfile(path) and name.lower().endswith(exts) and keep(path):
                 found.append(path)
     return found
+
+
+def resolve_input(path: str, recursive: bool = True,
+                  extensions: Sequence[str] = INPUT_EXTENSIONS,
+                  exclude: Sequence[str] = ()) -> Tuple[str, List[str]]:
+    """Turn a folder *or a single image* into (root, files).
+
+    Pointing the tool at one file is the common small job - a hero image, a
+    logo someone just exported - and needing to invent a folder for it is
+    pure friction. A file resolves to its own parent as the root, so output
+    paths and the reports behave exactly as they do for a folder run.
+    """
+    path = os.path.abspath(os.path.expanduser(path))
+    if os.path.isfile(path):
+        if not path.lower().endswith(tuple(e.lower() for e in extensions)):
+            return os.path.dirname(path), []
+        if is_excluded(os.path.basename(path), exclude):
+            return os.path.dirname(path), []
+        return os.path.dirname(path), [path]
+    return path, discover(path, recursive, extensions, exclude)
 
 
 def default_workers() -> int:

@@ -29,7 +29,7 @@ from image_optimizer.preview import TracePreview, ZOOM_LEVELS
 from image_optimizer.engine import Variant, output_path_for
 from image_optimizer import formats as fmt_module
 from image_optimizer.batch import (BatchProgress, BatchSummary, default_workers,
-                                   discover, run_batch)
+                                   resolve_input, run_batch)
 from image_optimizer.engine import MODE_FIXED, MODE_LOSSLESS, MODE_SMART, FileResult
 
 log_queue: "queue.Queue[logging.LogRecord]" = queue.Queue()
@@ -258,7 +258,7 @@ class SvgPreviewWindow(ctk.CTkToplevel):
 
     # -- decisions ---------------------------------------------------------
     def _svg_dest(self) -> str:
-        return output_path_for(self.result.source, self.app.input_path_var.get(),
+        return output_path_for(self.result.source, self.app.input_root,
                                self.app.output_path_var.get(), fmt_module.SVG_SPEC)
 
     def _keep(self) -> None:
@@ -296,6 +296,9 @@ class ImageOptimizerApp(ctk.CTk):
         self.worker: Optional[threading.Thread] = None
         self.summary: Optional[BatchSummary] = None
         self.result_rows: List[FileResult] = []
+        # The folder results are named relative to. For a single-file run that
+        # is the file's parent, not the path in the Source box.
+        self.input_root: str = ''
 
         self.title(f'Web Image Optimizer {__version__}')
         self.geometry('1000x820')
@@ -357,13 +360,17 @@ class ImageOptimizerApp(ctk.CTk):
         frame.grid(row=1, column=0, padx=20, pady=8, sticky='ew')
         frame.grid_columnconfigure(1, weight=1)
 
-        ctk.CTkLabel(frame, text='Source folder').grid(
+        ctk.CTkLabel(frame, text='Source').grid(
             row=0, column=0, padx=(14, 8), pady=(12, 6), sticky='w')
         self.input_path_var = ctk.StringVar(value=self.config_data.last_input)
         ctk.CTkEntry(frame, textvariable=self.input_path_var).grid(
             row=0, column=1, pady=(12, 6), sticky='ew')
-        ctk.CTkButton(frame, text='Browse...', width=100, command=self._browse_input
-                      ).grid(row=0, column=2, padx=(8, 14), pady=(12, 6))
+        input_buttons = ctk.CTkFrame(frame, fg_color='transparent')
+        input_buttons.grid(row=0, column=2, padx=(8, 14), pady=(12, 6))
+        ctk.CTkButton(input_buttons, text='Folder...', width=80,
+                      command=self._browse_input).pack(side='left')
+        ctk.CTkButton(input_buttons, text='File...', width=62,
+                      command=self._browse_input_file).pack(side='left', padx=(6, 0))
 
         ctk.CTkLabel(frame, text='Output folder').grid(
             row=1, column=0, padx=(14, 8), pady=(6, 12), sticky='w')
@@ -505,8 +512,16 @@ class ImageOptimizerApp(ctk.CTk):
                      ).grid(row=3, column=1, columnspan=2, padx=(0, 16), pady=6,
                             sticky='ew')
 
+        ctk.CTkLabel(tab, text='Exclude').grid(row=4, column=0, padx=16, pady=6,
+                                               sticky='w')
+        self.exclude_var = ctk.StringVar(value=', '.join(self.settings.exclude))
+        ctk.CTkEntry(tab, textvariable=self.exclude_var,
+                     placeholder_text='icons/*, *.gif  - globs, relative to the source folder'
+                     ).grid(row=4, column=1, columnspan=2, padx=(0, 16), pady=6,
+                            sticky='ew')
+
         toggles = ctk.CTkFrame(tab, fg_color='transparent')
-        toggles.grid(row=4, column=0, columnspan=3, padx=12, pady=(12, 6), sticky='ew')
+        toggles.grid(row=5, column=0, columnspan=3, padx=12, pady=(12, 6), sticky='ew')
         self.recursive_var = ctk.BooleanVar(value=self.settings.recursive)
         self.skip_existing_var = ctk.BooleanVar(value=self.settings.skip_existing)
         self.strip_var = ctk.BooleanVar(value=self.settings.strip_metadata)
@@ -525,7 +540,7 @@ class ImageOptimizerApp(ctk.CTk):
                 row=index, column=0, padx=4, pady=3, sticky='w')
 
         svg_frame = ctk.CTkFrame(tab, fg_color='transparent')
-        svg_frame.grid(row=5, column=0, columnspan=3, padx=12, pady=(4, 2), sticky='ew')
+        svg_frame.grid(row=6, column=0, columnspan=3, padx=12, pady=(4, 2), sticky='ew')
         self.vectorize_var = ctk.BooleanVar(value=self.settings.vectorize)
         svg_hint = vector_module.availability_hint()
         self.vectorize_check = ctk.CTkCheckBox(
@@ -541,7 +556,7 @@ class ImageOptimizerApp(ctk.CTk):
                          ).grid(row=1, column=0, padx=32, pady=(0, 4), sticky='w')
 
         worker_frame = ctk.CTkFrame(tab, fg_color='transparent')
-        worker_frame.grid(row=6, column=0, columnspan=3, padx=16, pady=(6, 14),
+        worker_frame.grid(row=7, column=0, columnspan=3, padx=16, pady=(6, 14),
                           sticky='w')
         ctk.CTkLabel(worker_frame, text='Parallel workers').pack(side='left')
         self.workers_var = ctk.IntVar(value=self.config_data.workers or default_workers())
@@ -740,6 +755,8 @@ class ImageOptimizerApp(ctk.CTk):
         self.max_width_var.set(str(s.max_width or ''))
         self.max_height_var.set(str(s.max_height or ''))
         self.widths_var.set(', '.join(str(w) for w in s.widths))
+        if hasattr(self, 'exclude_var'):
+            self.exclude_var.set(', '.join(s.exclude))
         self.strip_var.set(s.strip_metadata)
         self.srgb_var.set(s.convert_to_srgb)
         self.never_larger_var.set(s.never_larger)
@@ -794,6 +811,7 @@ class ImageOptimizerApp(ctk.CTk):
         s.convert_to_srgb = bool(self.srgb_var.get())
         s.never_larger = bool(self.never_larger_var.get())
         s.vectorize = bool(self.vectorize_var.get()) and not vector_module.availability_hint()
+        s.exclude = self._exclude_patterns()
         return s
 
     def _collect_ai_settings(self):
@@ -820,20 +838,37 @@ class ImageOptimizerApp(ctk.CTk):
             self.output_path_var.set(os.path.join(chosen, 'optimized'))
         self._rescan()
 
+    def _browse_input_file(self) -> None:
+        patterns = ' '.join(f'*{e}' for e in fmt.INPUT_EXTENSIONS)
+        chosen = filedialog.askopenfilename(
+            title='Select an image', filetypes=[('Images', patterns), ('All files', '*')])
+        if not chosen:
+            return
+        self.input_path_var.set(chosen)
+        if not self.output_path_var.get():
+            self.output_path_var.set(os.path.join(os.path.dirname(chosen), 'optimized'))
+        self._rescan()
+
     def _browse_output(self) -> None:
         chosen = filedialog.askdirectory(title='Select the output folder')
         if chosen:
             self.output_path_var.set(chosen)
 
     def _rescan(self) -> None:
-        folder = self.input_path_var.get()
-        if not os.path.isdir(folder):
+        source = self.input_path_var.get()
+        if not source or not os.path.exists(source):
             self.scan_label.configure(text='')
             return
-        files = discover(folder, bool(self.recursive_var.get()))
+        _, files = resolve_input(source, bool(self.recursive_var.get()),
+                                 exclude=self._exclude_patterns())
         total = sum(os.path.getsize(f) for f in files if os.path.exists(f))
+        note = ' (excluded some)' if self._exclude_patterns() and os.path.isdir(source) else ''
         self.scan_label.configure(
-            text=f'{len(files)} image(s) found, {report.format_bytes(total)} total')
+            text=f'{len(files)} image(s) found, {report.format_bytes(total)} total{note}')
+
+    def _exclude_patterns(self) -> tuple:
+        raw = self.exclude_var.get() if hasattr(self, 'exclude_var') else ''
+        return tuple(p.strip() for p in raw.replace(';', ',').split(',') if p.strip())
 
     # ------------------------------------------------------------------
     # Run
@@ -842,9 +877,10 @@ class ImageOptimizerApp(ctk.CTk):
         input_dir = self.input_path_var.get().strip()
         output_dir = self.output_path_var.get().strip()
 
-        if not input_dir or not os.path.isdir(input_dir):
-            messagebox.showerror('Pick a source folder',
-                                 'Choose a folder that contains your images.', parent=self)
+        if not input_dir or not os.path.exists(input_dir):
+            messagebox.showerror('Pick a source',
+                                 'Choose a folder of images, or a single image file.',
+                                 parent=self)
             return
         if not output_dir:
             messagebox.showerror('Pick an output folder',
@@ -875,11 +911,15 @@ class ImageOptimizerApp(ctk.CTk):
                     f'{hint}\n\nContinue without alt text?', parent=self):
                 return
 
-        files = discover(input_dir, settings.recursive)
+        input_root, files = resolve_input(input_dir, settings.recursive,
+                                          exclude=settings.exclude)
+        self.input_root = input_root
         if not files:
+            extra = ('\n\nEverything matched an Exclude pattern.'
+                     if settings.exclude else '')
             messagebox.showwarning(
                 'Nothing to do',
-                f'No supported images found in {input_dir}.\n\nSupported: '
+                f'No supported images found in {input_dir}.{extra}\n\nSupported: '
                 f'{", ".join(fmt.INPUT_EXTENSIONS)}', parent=self)
             return
 
@@ -899,7 +939,7 @@ class ImageOptimizerApp(ctk.CTk):
         self.cancel_event = threading.Event()
         self.worker = threading.Thread(
             target=self._run_worker,
-            args=(input_dir, output_dir, settings, ai_settings, files),
+            args=(input_root, output_dir, settings, ai_settings, files),
             daemon=True)
         self.worker.start()
 
@@ -985,7 +1025,8 @@ class ImageOptimizerApp(ctk.CTk):
             self._log_result(progress.result)
 
     def _log_result(self, result: FileResult) -> None:
-        name = os.path.relpath(result.source, self.input_path_var.get())
+        name = os.path.relpath(result.source, self.input_root or
+                               os.path.dirname(result.source))
         if not result.ok:
             logger.error(f'{name}: {result.error}')
             return
@@ -1021,7 +1062,8 @@ class ImageOptimizerApp(ctk.CTk):
         frame = ctk.CTkFrame(self.results_frame, fg_color='transparent')
         frame.grid(row=row_index, column=0, sticky='ew', pady=1)
 
-        name = os.path.relpath(result.source, self.input_path_var.get())
+        name = os.path.relpath(result.source, self.input_root or
+                               os.path.dirname(result.source))
         if not result.ok:
             ctk.CTkLabel(frame, text=name, width=320, anchor='w').grid(row=0, column=0, padx=4)
             ctk.CTkLabel(frame, text=result.error or 'failed', anchor='w',

@@ -16,7 +16,7 @@ from typing import List, Optional, Sequence
 from . import formats as fmt
 from . import report
 from .ai import AISettings, AIUnavailable, MODEL_CHOICES, apply_to_results, describe_batch
-from .batch import default_workers, discover, run_batch
+from .batch import default_workers, resolve_input, run_batch
 from .config import BUILTIN_PRESETS, AppConfig, load as load_config
 from .engine import MODE_FIXED, MODE_LOSSLESS, MODE_SMART, OptimizeSettings
 from .quality import QUALITY_TARGETS
@@ -30,7 +30,8 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='Presets: ' + ', '.join(f'"{n}"' for n in BUILTIN_PRESETS))
 
-    parser.add_argument('input', nargs='?', help='folder of source images')
+    parser.add_argument('input', nargs='?',
+                        help='folder of source images, or a single image file')
     parser.add_argument('output', nargs='?', help='destination folder')
 
     parser.add_argument('--preset', help='start from a named preset')
@@ -75,6 +76,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument('-j', '--workers', type=int, default=None)
     run.add_argument('--no-recursive', dest='recursive', action='store_false',
                      default=None, help='do not descend into subfolders')
+    run.add_argument('--exclude', action='append', metavar='GLOB', default=None,
+                     help='skip paths matching this glob, relative to the input '
+                          'folder (e.g. "icons/*", "*.gif"). Repeatable.')
     run.add_argument('--skip-existing', action='store_true', default=None,
                      help='leave up-to-date outputs alone (incremental builds)')
     run.add_argument('--dry-run', action='store_true',
@@ -141,14 +145,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
 
     if not args.input or not args.output:
-        parser.error('input and output folders are required')
-    if not os.path.isdir(args.input):
-        parser.error(f'input folder does not exist: {args.input}')
+        parser.error('an input (folder or image) and an output folder are required')
+    if not os.path.exists(args.input):
+        parser.error(f'input does not exist: {args.input}')
 
     config = load_config()
     if args.preset and not config.apply_preset(args.preset):
         parser.error(f'unknown preset: {args.preset}')
     settings = _apply_overrides(config, args)
+    if args.exclude:
+        settings.exclude = tuple(args.exclude)
 
     if settings.vectorize:
         from .vectorize import availability_hint as svg_hint
@@ -157,15 +163,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print(f'--svg: {hint}', file=sys.stderr)
             return 2
 
-    files = discover(args.input, settings.recursive)
+    # A single image resolves to its own folder as the root, so output paths
+    # and reports behave exactly as they do for a folder run.
+    input_root, files = resolve_input(args.input, settings.recursive,
+                                      exclude=settings.exclude)
     if not files:
-        print(f'No supported images found in {args.input}', file=sys.stderr)
+        where = ('that file' if os.path.isfile(args.input)
+                 else f'{args.input}')
+        note = ' (everything was excluded?)' if settings.exclude else ''
+        print(f'No supported images found in {where}{note}', file=sys.stderr)
         return 1
 
     if args.list_only:
         print(f'{len(files)} image(s) would be processed:')
         for path in files:
-            print('  ' + os.path.relpath(path, args.input))
+            print('  ' + os.path.relpath(path, input_root))
         return 0
 
     settings.dry_run = args.dry_run
@@ -179,7 +191,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if args.quiet:
             return
         result = progress.result
-        name = os.path.relpath(result.source, args.input)
+        name = os.path.relpath(result.source, input_root)
         if not result.ok:
             print(f'  [{progress.done}/{progress.total}] {name}: '
                   f'FAILED - {result.error}', file=sys.stderr)
@@ -202,7 +214,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     cancel = threading.Event()
     try:
-        summary = run_batch(args.input, args.output, settings, files=files,
+        summary = run_batch(input_root, args.output, settings, files=files,
                             workers=workers, progress=on_progress, cancel=cancel)
     except KeyboardInterrupt:
         cancel.set()

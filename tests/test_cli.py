@@ -150,3 +150,46 @@ def test_alt_text_is_skipped_cleanly_without_credentials(sample_tree, tmp_path,
                  '--alt-text', '--quiet'])
     assert code == 0
     assert 'Alt text skipped' in capsys.readouterr().err
+
+
+def test_cli_optimises_a_single_file(sample_tree, tmp_path):
+    out = tmp_path / 'out'
+    assert main([str(sample_tree / 'photo.jpg'), str(out), '-f', 'webp', '--quiet']) == 0
+    assert (out / 'photo.webp').exists()
+    assert not (out / 'logo.webp').exists()      # only that one file
+
+
+def test_cli_rejects_a_missing_input(tmp_path):
+    with pytest.raises(SystemExit):
+        main([str(tmp_path / 'nope.png'), str(tmp_path / 'out')])
+
+
+def test_cli_exclude_skips_matching_files(sample_tree, tmp_path):
+    out = tmp_path / 'out'
+    main([str(sample_tree), str(out), '-f', 'webp', '--exclude', '*.png', '--quiet'])
+    assert (out / 'photo.webp').exists()
+    assert not (out / 'logo.webp').exists()
+
+
+def test_cli_exclude_is_repeatable(sample_tree, tmp_path):
+    out = tmp_path / 'out'
+    main([str(sample_tree), str(out), '-f', 'webp',
+          '--exclude', 'logo.png', '--exclude', 'nested', '--quiet'])
+    assert not (out / 'logo.webp').exists()
+    assert not (out / 'nested').exists()
+    assert (out / 'photo.webp').exists()
+
+
+def test_cli_says_so_when_everything_is_excluded(sample_tree, tmp_path, capsys):
+    assert main([str(sample_tree), str(tmp_path / 'out'), '--exclude', '*']) == 1
+    assert 'excluded' in capsys.readouterr().err
+
+
+def test_a_single_file_report_names_it_relative_to_its_folder(sample_tree, tmp_path):
+    import json
+    out, report_path = tmp_path / 'out', tmp_path / 'r.json'
+    main([str(sample_tree / 'nested' / 'inner.png'), str(out), '-f', 'webp',
+          '--json', str(report_path), '--quiet'])
+    data = json.loads(report_path.read_text())
+    assert data['totals']['optimized'] == 1
+    assert (out / 'inner.webp').exists()      # not out/nested/inner.webp

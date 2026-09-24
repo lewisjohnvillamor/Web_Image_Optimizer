@@ -47,10 +47,12 @@ class OptimizeSettings:
     vectorize: bool = False              # also trace flat graphics to SVG
     vector_min_score: float = 0.95       # SSIM the trace must reach to be kept
     dry_run: bool = False                # measure everything, write nothing
+    exclude: Tuple[str, ...] = ()        # globs to leave alone
 
     def to_dict(self) -> Dict[str, object]:
         d = dict(self.__dict__)
         d['widths'] = list(self.widths)
+        d['exclude'] = list(self.exclude)
         return d
 
     @classmethod
@@ -58,6 +60,8 @@ class OptimizeSettings:
         known = {k: v for k, v in (data or {}).items() if k in cls.__dataclass_fields__}
         if 'widths' in known and known['widths'] is not None:
             known['widths'] = tuple(int(w) for w in known['widths'])
+        if known.get('exclude') is not None:
+            known['exclude'] = tuple(str(x) for x in known['exclude'])
         return cls(**known)
 
 

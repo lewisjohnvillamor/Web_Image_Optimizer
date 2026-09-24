@@ -131,8 +131,11 @@ python image_optimizer_gui.py
 
 ![The Quality tab](docs/images/light-01-quality.png)
 
-* **Source folder** — where your images are. Subfolders are included by default
-  and the structure is preserved in the output.
+* **Source** — a folder of images, or a single image. **Folder...** and
+  **File...** pick either. Subfolders are included by default and the structure
+  is preserved in the output.
+* **Exclude** (Output tab) — comma-separated globs, relative to the source
+  folder, for anything you want left alone: `icons/*, *.gif`.
 * **Output folder** — where the optimised files go. **Use a different folder from
   your source.** The line underneath tells you how many images were found and
   what they currently weigh.
@@ -231,6 +234,9 @@ Widths larger than the source are skipped — it never upscales.
 ### The rest
 
 * **Include subfolders** — walk the tree, preserving structure.
+* **Exclude** — globs matched against each path relative to the source folder.
+  `*` crosses folders, so `*.gif` matches at any depth, and a bare folder name
+  excludes everything under it. Excluded folders are not walked into at all.
 * **Skip images whose output is already up to date** — incremental builds. A
   second run over unchanged files costs one `stat()` per file, not a re-encode.
 * **Strip EXIF and other metadata** — smaller files. Turn it off to keep camera
@@ -434,6 +440,12 @@ Same engine, same presets, scriptable — for build pipelines and CI.
 # The common case
 python -m image_optimizer ./images ./dist
 
+# Just the one image - no need to invent a folder for it
+python -m image_optimizer ./images/hero.jpg ./dist
+
+# Leave things alone: globs relative to the source folder, repeatable
+python -m image_optimizer ./images ./dist --exclude 'icons/*' --exclude '*.gif'
+
 # A responsive set plus the markup to serve it
 python -m image_optimizer ./images ./dist \
     --widths 1600,1200,800,400 --markup --base-url /assets/img
@@ -503,6 +515,7 @@ The exit code is non-zero if any file failed, so it works as a CI gate.
 | `--svg-min-score 0-1` | SSIM a trace must reach to be kept (default 0.95) |
 | `--skip-existing` | Incremental builds |
 | `--no-recursive` | Do not descend into subfolders |
+| `--exclude GLOB` | Skip matching paths; repeatable |
 | `-j, --workers N` | Parallel workers |
 | `--json`, `--csv`, `--html` | Write reports to these paths |
 | `--markup [PATH]` | Write `<picture>` snippets |
