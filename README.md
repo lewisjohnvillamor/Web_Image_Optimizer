@@ -57,15 +57,47 @@ setting was simply the wrong tool for that image.
 1. **Analyse the pixels** — photo, illustration, flat graphic, or screenshot with
    text? Measured from edge density, colour spread and how much of the frame is
    flat.
-2. **Encode it several ways** — AVIF and WebP, lossy and (for flat art) lossless.
-3. **Score each result** against the original with SSIM, and **binary-search the
+2. **Strip what carries no information** — losslessly, before any encoding.
+   See [Lossless preprocessing](#lossless-preprocessing) below.
+3. **Encode it several ways** — AVIF and WebP, lossy and (for flat art) lossless,
+   with chroma subsampling decided by measurement rather than a rule of thumb.
+4. **Score each result** against the original with SSIM, and **binary-search the
    quality scale** for the cheapest setting that still clears your visual target.
-4. **Keep the smallest file** that passed. If nothing beat the original, the
+5. **Keep the smallest file** that passed. If nothing beat the original, the
    original is copied through untouched.
 
 The cost is time: measuring is several times slower than blind conversion. The
 search runs at a cheap encoder setting and only re-encodes the winner at full
 effort, which keeps it to roughly 3× a fixed-quality run.
+
+### Lossless preprocessing
+
+Two clean-ups remove bytes that carry nothing anyone can see, so there is no
+quality trade to weigh:
+
+* **Transparent-pixel colour.** A PNG exported from a design tool keeps
+  whatever colour the artwork had before it was erased. Those pixels are
+  invisible — alpha is zero — but a lossless encoder still has to encode them,
+  and noise there is expensive. Flattening that field measured **522 KB → 4.3 KB
+  on lossless WebP (−99%)** for a logo exported that way, and **−75%** through
+  the full pipeline.
+* **Redundant colour channels.** A greyscale image stored as RGB pays for two
+  channels carrying nothing: **−26%** on PNG output. WebP handles this
+  internally, so it is applied where it was measured to pay.
+
+### Colour is measured separately from detail
+
+SSIM runs on the luma plane, so it is blind to colour damage by construction —
+across the sample set, switching to 4:2:0 chroma subsampling moved SSIM by at
+most 0.0004 while the actual colour error ranged over two orders of magnitude.
+
+So the subsampling decision is measured rather than guessed. The tool performs
+the same operation the codec would — halve the chroma planes and restore them —
+and counts the pixels that visibly shift. Photographs measure 0.00% and get the
+cheaper encode; coloured text and logos measure 1.5–2% and keep full chroma.
+That is worth **−8% to −10%** on images the previous "any sharp edge" rule
+forced to 4:4:4, and it costs about a millisecond instead of two extra
+encodes.
 
 ---
 
@@ -622,7 +654,12 @@ by hand.
 * SSIM is a good, cheap proxy for visible difference, not a model of human
   vision. On very grainy or noisy sources no quality setting reaches a high
   target, so the tool falls back to the content analyser's recommendation rather
-  than burning bytes chasing a score it cannot hit.
+  than burning bytes chasing a score it cannot hit. It also runs on luma only,
+  which is why colour decisions are measured separately rather than folded in.
+* Denoising before encoding was tried and **rejected**. Measured properly — as
+  size at matched SSIM against the original — it lost to simply lowering
+  quality at every target, and capped reachable SSIM at 0.82–0.92. Gating it on
+  SSIM would have meant it never fired. Noise is kept.
 * Smart mode is several times slower than fixed-quality conversion. That is the
   cost of the file sizes above.
 * SEO filenames are *suggested*, not applied — renaming would break existing
@@ -650,7 +687,7 @@ project-card cover from [`docs/cover.html`](docs/cover.html) (2:1, laid out
 centred so a card that centre-crops it still shows every word). Each file's
 header comment has the render and optimise commands.
 
-163 tests cover the perceptual metric, the content classifier, the encoder
+208 tests cover the perceptual metric, the content classifier, the encoder
 (EXIF orientation, alpha handling, the never-larger guarantee), batch execution
 and cancellation, the reports and markup, presets, the CLI, the AI layer
 against a fake client, the SVG tracer's gate (what is refused, what is
@@ -666,6 +703,7 @@ image_optimizer/
     batch.py      discovery, parallelism, cancellation
     report.py     JSON/CSV/HTML reports and <picture> markup
     ai.py         optional Claude alt text
+    preprocess.py lossless clean-ups: transparent-pixel colour, redundant channels
     vectorize.py  optional SVG tracing for flat graphics, with a fidelity gate
     preview.py    side-by-side raster/SVG panes, diff view, keep/discard/re-trace
     config.py     presets and persisted preferences
